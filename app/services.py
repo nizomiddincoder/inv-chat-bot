@@ -142,8 +142,8 @@ def get_all_courses() -> list[Course]:
 
 
 def match_course(text: str, courses: list[Course]) -> Course | None:
-    """Match typed text ('1', '2', 'trading', ...) against the course list."""
-    t = text.strip().lower()
+    """Match typed text ('1', '2)', 'trading', ...) against the course list."""
+    t = text.strip().lower().rstrip(".):")
     if not t:
         return None
     if t.isdigit():

@@ -136,7 +136,8 @@ print("full flow OK ->", lead.full_name, lead.phone, lead.course)
 
 # --- 7. Dedup: same user again -> still exactly one lead ---
 business_text("/start")
-business_text("1")
+business_text("2)")  # typed number with punctuation also selects a course
+assert "Ismingizni yozib qoldiring" in sent[-1][1]["text"], sent[-1][1]["text"]
 business_text("Ali Valiyev")
 business_text("901234567")
 with SessionLocal() as s:

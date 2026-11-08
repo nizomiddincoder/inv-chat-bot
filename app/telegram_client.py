@@ -68,6 +68,36 @@ def set_webhook() -> bool:
 BUSINESS_ERRORS = ("BUSINESS_PEER_INVALID", "BUSINESS_CONNECTION_INVALID")
 
 
+def _diagnose_business_connection(connection_id: str) -> None:
+    """After a failed business send, check the connection and log its rights.
+
+    The owner can see the result in Railway logs and fix the permission in
+    Telegram (Settings -> Business -> Chatbots -> enable 'Reply to messages').
+    """
+    result, error = _post("getBusinessConnection", {"business_connection_id": connection_id})
+    if result is None:
+        log.error(
+            "getBusinessConnection failed: %s (connection_id=%s). "
+            "The connection is likely stale — remove and re-add the bot in "
+            "Telegram: Settings -> Business -> Chatbots.",
+            error,
+            connection_id,
+        )
+        return
+    rights = result.get("rights") or {}
+    can_reply = rights.get("can_reply", result.get("can_reply"))
+    log.error(
+        "Business connection status: is_enabled=%s can_reply=%s (connection_id=%s). "
+        "If can_reply is False: open Telegram -> Settings -> Business -> Chatbots, "
+        "tap the bot and enable the 'Reply to messages' permission (or remove and "
+        "re-add the bot). Note: replies are only possible to chats that wrote to "
+        "the account in the last 24 hours.",
+        result.get("is_enabled"),
+        can_reply,
+        connection_id,
+    )
+
+
 def send_message(
     chat_id: int | str,
     text: str,
@@ -78,8 +108,8 @@ def send_message(
 
     If Telegram answers BUSINESS_PEER_INVALID / BUSINESS_CONNECTION_INVALID, the
     message is retried once WITHOUT the connection id (harmless: a 400 response
-    means nothing was delivered, so no duplicate can happen) and the log shows
-    an actionable hint for the owner.
+    means nothing was delivered, so no duplicate can happen). If the retry also
+    fails, the bot logs the connection's actual permission status.
     """
     payload: dict = {"chat_id": chat_id, "text": text}
     if business_connection_id:
@@ -92,10 +122,6 @@ def send_message(
     if result is None and business_connection_id and error and any(e in error for e in BUSINESS_ERRORS):
         log.error(
             "sendMessage to chat %s failed: %s (business_connection_id=%s). "
-            "HINT: the chat must belong to the connected business account. Check: "
-            "1) Settings -> Business -> Chatbots -> reconnect this bot; "
-            "2) BotFather -> /mybots -> Bot Settings -> Business Mode is enabled; "
-            "3) the chat is not excluded in the Chatbots chat list. "
             "Retrying once WITHOUT the connection id...",
             chat_id,
             error,
@@ -103,6 +129,8 @@ def send_message(
         )
         payload.pop("business_connection_id", None)
         result, error = _post("sendMessage", payload)
+        if result is None:
+            _diagnose_business_connection(business_connection_id)
 
     if result is None and error:
         if "bot was blocked by the user" in error:
@@ -111,6 +139,16 @@ def send_message(
                 "HINT: this user has BLOCKED the bot in Telegram. That also blocks "
                 "business-mode replies (BUSINESS_PEER_INVALID). Ask the user to open "
                 "the bot's chat, press Unblock (or Start), then send /start.",
+                error,
+                chat_id,
+            )
+        elif "can't initiate conversation with a user" in error:
+            log.error(
+                "Telegram API sendMessage failed: %s (chat_id=%s). "
+                "HINT: this user has never pressed Start in the bot's chat, so the "
+                "bot cannot message them directly. (Business-mode replies do not "
+                "require Start — if those fail too, see the BUSINESS_PEER_INVALID "
+                "hint above.)",
                 error,
                 chat_id,
             )
