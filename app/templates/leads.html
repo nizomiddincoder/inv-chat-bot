@@ -7,7 +7,8 @@
   .assign-select, .source-label { font-size: 13px; }
   .assign-select { max-width: 140px; }
   .fu-input { width: 118px; font-size: 13px; }
-  .fu-input.overdue { border-color: var(--red); color: var(--red); font-weight: 600; }
+  .fu-input.overdue, .trial-input.overdue { border-color: var(--red); color: var(--red); font-weight: 600; }
+  .trial-input { width: 118px; font-size: 13px; }
   .note-input { width: 120px; }
   .note-open { font-size: 12px; color: var(--primary); background: none; border: none; padding: 0; height: auto; cursor: pointer; font-weight: 600; }
   .note-open:hover { background: none; text-decoration: underline; }
@@ -36,6 +37,7 @@
     max-width: 480px; width: 100%; max-height: 80vh; overflow-y: auto;
   }
   .modal h2 { margin-bottom: 12px; }
+  .modal select { width: 100%; }
   .note-item { border-bottom: 1px solid var(--border); padding: 9px 2px; }
   .note-item:last-child { border-bottom: none; }
   .note-item .meta { color: var(--faint); font-size: 12px; margin-top: 3px; }
@@ -114,7 +116,7 @@
   <thead>
     <tr>
       <th>ID</th><th>Ism</th><th>Telefon</th><th>Kurs</th><th>Manba</th>
-      <th>Mas'ul</th><th>Holat</th><th>Keyingi qo'ng'iroq</th><th>Izoh</th>
+      <th>Mas'ul</th><th>Holat</th><th>Sinov darsi</th><th>Keyingi qo'ng'iroq</th><th>Izoh</th>
     </tr>
   </thead>
   <tbody>
@@ -152,6 +154,10 @@
         </span>
       </td>
       <td>
+        <input type="date" class="trial-input {{ 'overdue' if (lead.trial_date and lead.trial_date <= today) else '' }}" value="{{ lead.trial_date.isoformat() if lead.trial_date else '' }}"
+               data-trial-lead="{{ lead.id }}" title="Sinov darsi sanasi">
+      </td>
+      <td>
         <input type="date" class="fu-input {{ 'overdue' if overdue else '' }}" value="{{ lead.follow_up_at.isoformat() if lead.follow_up_at else '' }}"
                data-follow-lead="{{ lead.id }}" title="Keyingi qo'ng'iroq sanasi">
       </td>
@@ -162,10 +168,27 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="9" class="muted">Hozircha lid yo'q.</td></tr>
+    <tr><td colspan="10" class="muted">Hozircha lid yo'q.</td></tr>
   {% endfor %}
   </tbody>
 </table>
+</div>
+
+<!-- enrollment group modal -->
+<div class="modal-backdrop" id="enroll-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Guruh tanlash</h2>
+    <p>Talaba qaysi guruhga yozilsin? To'lgan guruh tanlansa, talaba navbatga yoziladi.</p>
+    <select id="enroll-group">
+      {% for g in enroll_groups %}
+      <option value="{{ g.id }}">{{ g.name }}{% if g.full %} — TO'LDI (navbatga){% elif g.capacity %} ({{ g.active }}/{{ g.capacity }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <div class="actions">
+      <button type="button" class="outline" id="enroll-cancel">Bekor qilish</button>
+      <button type="button" id="enroll-confirm">Yozish</button>
+    </div>
+  </div>
 </div>
 
 <!-- comment history modal -->
@@ -206,7 +229,27 @@
     });
   }
 
-  // --- status: save immediately; "Rad etildi" requires a reason ---
+  // --- enrollment: group selection dialog ("O'qishga yozildi") ---
+  var enrollModal = document.getElementById("enroll-modal");
+  var enrollSelect = document.getElementById("enroll-group");
+  var pendingEnroll = null;
+
+  function submitStatus(id, status, reason, groupId) {
+    var params = { status: status, reason: reason || "" };
+    if (groupId) params.group_id = groupId;
+    return post("/admin/leads/" + id + "/status", params)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) { showToast(data.error || "Saqlanmadi"); return null; }
+        var dot = document.querySelector("[data-dot='" + id + "']");
+        if (dot) dot.className = "st-dot st-" + status;
+        showToast(data.waiting ? "Guruh to'lgan — talaba navbatga yozildi" : "Saqlandi");
+        return data;
+      })
+      .catch(function () { showToast("Tarmoq xatosi"); return null; });
+  }
+
+  // --- status: save immediately; "Rad etildi" needs a reason, "O'qishga yozildi" a group ---
   document.querySelectorAll("select[data-status-lead]").forEach(function (sel) {
     sel.addEventListener("change", function () {
       var id = sel.dataset.statusLead;
@@ -231,16 +274,46 @@
         reason = row.querySelector("[data-reason-lead='" + id + "']").value;
         if (!reason) { showToast("Rad etish sababini tanlang"); return; }
       }
-      post("/admin/leads/" + id + "/status", { status: status, reason: reason })
+      if (status === "enrolled" && {{ 'true' if enroll_groups else 'false' }}) {
+        pendingEnroll = { id: id, row: row };
+        enrollModal.hidden = false;
+        return;
+      }
+      submitStatus(id, status, reason).then(function (data) {
+        if (data && status !== "rejected") {
+          var rs = row.querySelector("[data-reason-lead='" + id + "']");
+          if (rs) rs.remove();
+        }
+      });
+    });
+  });
+
+  document.getElementById("enroll-cancel").addEventListener("click", function () {
+    enrollModal.hidden = true; pendingEnroll = null;
+  });
+  enrollModal.addEventListener("click", function (e) { if (e.target === enrollModal) { enrollModal.hidden = true; pendingEnroll = null; } });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { enrollModal.hidden = true; pendingEnroll = null; } });
+  document.getElementById("enroll-confirm").addEventListener("click", function () {
+    if (!pendingEnroll) return;
+    var p = pendingEnroll;
+    enrollModal.hidden = true; pendingEnroll = null;
+    submitStatus(p.id, "enrolled", "", enrollSelect.value).then(function (data) {
+      if (data) {
+        var rs = p.row.querySelector("[data-reason-lead='" + p.id + "']");
+        if (rs) rs.remove();
+      }
+    });
+  });
+
+  // --- trial lesson date: save on change, highlight when due ---
+  document.querySelectorAll("input[data-trial-lead]").forEach(function (input) {
+    input.addEventListener("change", function () {
+      post("/admin/leads/" + input.dataset.trialLead + "/trial", { trial_date: input.value })
         .then(function (r) { return r.json(); })
         .then(function (data) {
           if (!data.ok) { showToast(data.error || "Saqlanmadi"); return; }
-          var dot = document.querySelector("[data-dot='" + id + "']");
-          if (dot) dot.className = "st-dot st-" + status;
-          if (status !== "rejected") {
-            var rs = row.querySelector("[data-reason-lead='" + id + "']");
-            if (rs) rs.remove();
-          }
+          var due = input.value && input.value <= "{{ today.isoformat() }}";
+          input.classList.toggle("overdue", due);
           showToast("Saqlandi");
         })
         .catch(function () { showToast("Tarmoq xatosi"); });

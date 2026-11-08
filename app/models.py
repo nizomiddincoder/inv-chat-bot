@@ -52,9 +52,13 @@ class Group(Base):
     name: Mapped[str] = mapped_column(String(120))
     course_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    # Free-text schedule like "Du/Chu/Ju 16:00" and start date "1-dekabr".
+    # Free-text schedule like "Du-Chor-Ju 16:00" and start date "1-dekabr".
     schedule: Mapped[str | None] = mapped_column(String(200), nullable=True)
     start_date: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    # Seats available; NULL/0 = no limit set yet.
+    capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ochiq | toldi | tugagan ("toldi" is set automatically when seats fill up)
+    status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -98,6 +102,10 @@ class Lead(Base):
     follow_up_at: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     # Filled when the lead is rejected: narx | boshqa_markaz | javob_yoq | vaqt_yoq | boshqa
     reject_reason: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    # Trial lesson: the lead can be moved to status "trial" with a date.
+    trial_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Group chosen when the lead is enrolled (groups.id).
+    group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # How many times this person applied again (phone dedup marker).
     repeat_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -115,6 +123,41 @@ class LeadNote(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     lead_id: Mapped[int] = mapped_column(Integer, index=True)
+    text: Mapped[str] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Student(Base):
+    """An enrolled student — created automatically from a lead on enrollment."""
+
+    __tablename__ = "students"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    full_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Where this student originally came from (copied from the lead).
+    source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # faol | tugatgan | toxtatgan | navbatda (waiting list of a full group)
+    status: Mapped[str] = mapped_column(String(20), default="faol", index=True)
+    # The lead this student was created from — keeps the history link.
+    lead_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Payments are planned for the next stage; free-form note for now.
+    payment_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    enrolled_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class StudentNote(Base):
+    """One entry in a student's comment history."""
+
+    __tablename__ = "student_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    student_id: Mapped[int] = mapped_column(Integer, index=True)
     text: Mapped[str] = mapped_column(Text)
     author: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

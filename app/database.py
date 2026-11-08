@@ -86,6 +86,12 @@ def _migrate_schema() -> None:
             "follow_up_at": "DATE",
             "reject_reason": "VARCHAR(60)",
             "repeat_count": "INTEGER",
+            "trial_date": "DATE",
+            "group_id": "INTEGER",
+        },
+        "groups": {
+            "capacity": "INTEGER",
+            "status": "VARCHAR(20)",
         },
     }
     with engine.begin() as conn:

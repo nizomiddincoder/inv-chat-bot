@@ -22,6 +22,8 @@ from .models import (
     LeadNote,
     ProcessedUpdate,
     Setting,
+    Student,
+    StudentNote,
     Teacher,
     utcnow,
 )
@@ -60,6 +62,19 @@ REJECT_REASONS = {
     "javob_yoq": "Javob bermadi",
     "vaqt_yoq": "Vaqti yo'q",
     "boshqa": "Boshqa",
+}
+
+STUDENT_STATUSES = {
+    "faol": "Faol",
+    "tugatgan": "Tugatgan",
+    "toxtatgan": "To'xtatgan",
+    "navbatda": "Navbatda",
+}
+
+GROUP_STATUSES = {
+    "ochiq": "Ochiq",
+    "toldi": "To'ldi",
+    "tugagan": "Tugagan",
 }
 
 
@@ -401,6 +416,12 @@ def build_dynamic_knowledge() -> str:
                 parts.append(f"jadval: {group.schedule}")
             if group.start_date:
                 parts.append(f"boshlanish: {group.start_date}")
+            if group.capacity:
+                parts.append(f"joylar: {group.capacity}")
+            if group.status == "toldi":
+                parts.append("GURUH TO'LDI — yangi o'quvchini navbatga yozing")
+            elif group.status == "tugagan":
+                parts.append("guruh tugagan — taklif qilmang")
             lines.append(f"- {' — '.join(parts)}")
     return "\n".join(lines).strip()
 
@@ -635,6 +656,165 @@ def add_lead_note(lead_id: int, text: str, author: str | None) -> LeadNote:
     """Append one entry to a lead's comment history."""
     with SessionLocal() as session:
         note = LeadNote(lead_id=lead_id, text=text[:2000], author=author or None)
+        session.add(note)
+        session.commit()
+        session.refresh(note)
+    return note
+
+
+# ---------------------------------------------------------------------------
+# Students and enrollment (lead -> student)
+# ---------------------------------------------------------------------------
+
+def get_students_filtered(q: str = "", group_id: int = 0, status: str = "") -> list[Student]:
+    with SessionLocal() as session:
+        query = session.query(Student)
+        if q:
+            like = f"%{q.strip()}%"
+            query = query.filter((Student.full_name.ilike(like)) | (Student.phone.ilike(like)))
+        if group_id:
+            query = query.filter(Student.group_id == group_id)
+        if status:
+            query = query.filter(Student.status == status)
+        return query.order_by(Student.updated_at.desc()).limit(500).all()
+
+
+def group_fill_status(group_id: int) -> str | None:
+    """Auto group status: seats filled -> "toldi"; manually closed stays "tugagan"."""
+    with SessionLocal() as session:
+        group = session.get(Group, group_id)
+        if group is None:
+            return None
+        if group.status == "tugagan":
+            return "tugagan"
+        capacity = group.capacity or 0
+        if capacity > 0:
+            active = (
+                session.query(Student)
+                .filter(Student.group_id == group_id, Student.status == "faol")
+                .count()
+            )
+            return "toldi" if active >= capacity else "ochiq"
+        return "ochiq"
+
+
+def refresh_group_status(group_id: int) -> None:
+    """Recompute and persist a group's auto fill status."""
+    status = group_fill_status(group_id)
+    if status is None:
+        return
+    with SessionLocal() as session:
+        group = session.get(Group, group_id)
+        if group and group.status != status:
+            group.status = status
+            session.commit()
+
+
+def enroll_lead(lead_id: int, group_id: int | None = None) -> tuple[Student, bool]:
+    """Create (or update) the student profile when a lead is enrolled.
+
+    If the chosen group is full, the student goes to the waiting list
+    (status "navbatda") instead of taking a seat. Returns (student, waiting).
+    """
+    now = utcnow()
+    today = datetime.now(TZ).date()
+    waiting = False
+    with SessionLocal() as session:
+        lead = session.get(Lead, lead_id)
+        if lead is None:
+            raise ValueError("lead not found")
+
+        if group_id:
+            group = session.get(Group, group_id)
+            if group is None:
+                group_id = None
+
+        student = session.query(Student).filter(Student.lead_id == lead_id).first()
+        if student is None:
+            # Also dedup by phone: the same person is one student row.
+            student = session.query(Student).filter(Student.phone == lead.phone).first()
+        if student is not None:
+            student.full_name = lead.full_name or student.full_name
+            student.phone = lead.phone or student.phone
+            student.username = lead.username or student.username
+            student.source = lead.source or student.source
+            student.group_id = group_id or student.group_id
+            student.lead_id = lead_id
+            student.updated_at = now
+        else:
+            student = Student(
+                full_name=lead.full_name,
+                phone=lead.phone,
+                username=lead.username,
+                source=lead.source,
+                group_id=group_id or None,
+                status="faol",
+                lead_id=lead_id,
+                enrolled_at=today,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(student)
+
+        # Full group -> waiting list instead of taking a seat.
+        if student.group_id and student.status in ("faol", "navbatda"):
+            group = session.get(Group, student.group_id)
+            capacity = (group.capacity or 0) if group else 0
+            active = (
+                session.query(Student)
+                .filter(
+                    Student.group_id == student.group_id,
+                    Student.status == "faol",
+                    Student.id != student.id,
+                )
+                .count()
+            )
+            if capacity > 0 and active >= capacity:
+                student.status = "navbatda"
+                waiting = True
+            else:
+                student.status = "faol"
+
+        lead.group_id = student.group_id
+        session.commit()
+        session.refresh(student)
+
+        if student.group_id:
+            refresh_group_status(student.group_id)
+        log.info(
+            "Lead %s enrolled -> student %s (group=%s, waiting=%s)",
+            lead_id, student.id, student.group_id, waiting,
+        )
+    return student, waiting
+
+
+def set_student_status(student_id: int, status: str) -> None:
+    """Change a student's status and refresh the group fill state."""
+    with SessionLocal() as session:
+        student = session.get(Student, student_id)
+        if student is None:
+            return
+        student.status = status
+        student.updated_at = utcnow()
+        session.commit()
+        if student.group_id:
+            refresh_group_status(student.group_id)
+
+
+def get_student_notes(student_id: int, limit: int = 50) -> list[StudentNote]:
+    with SessionLocal() as session:
+        return (
+            session.query(StudentNote)
+            .filter(StudentNote.student_id == student_id)
+            .order_by(StudentNote.id.desc())
+            .limit(limit)
+            .all()
+        )
+
+
+def add_student_note(student_id: int, text: str, author: str | None) -> StudentNote:
+    with SessionLocal() as session:
+        note = StudentNote(student_id=student_id, text=text[:2000], author=author or None)
         session.add(note)
         session.commit()
         session.refresh(note)

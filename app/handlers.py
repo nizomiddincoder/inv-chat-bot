@@ -57,6 +57,7 @@ ADMIN_HELP = (
 STATUS_LABELS_UZ = {
     "new": "Yangi",
     "contacted": "Aloqaga chiqildi",
+    "trial": "Sinov darsi",
     "enrolled": "O'qishga yozildi",
     "rejected": "Rad etildi",
 }

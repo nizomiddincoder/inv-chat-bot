@@ -331,7 +331,7 @@ with SessionLocal() as s:
 # move endpoint changes the lead status like a drag & drop would
 target = "enrolled" if old_status != "enrolled" else "contacted"
 r = client.post(f"/admin/leads/{lead_id}/move", data={"status": target}, headers=auth)
-assert r.status_code == 200 and r.json() == {"ok": True, "lead_id": lead_id, "status": target}
+assert r.status_code == 200 and r.json()["ok"] is True and r.json()["status"] == target
 with SessionLocal() as s:
     assert s.get(Lead, lead_id).status == target
 r = client.post(f"/admin/leads/{lead_id}/move", data={"status": "bogus"}, headers=auth)
@@ -531,6 +531,121 @@ client.post(f"/admin/employees/{emp.id}/delete", headers=auth, follow_redirects=
 with SessionLocal() as s:
     assert s.query(Employee).filter(Employee.login == "sardor").count() == 0
 print("employees CRUD OK")
+
+# --- 8e. Stage 2: groups (capacity), enrollment, students, trial lesson ---
+from app.models import Group, Student, StudentNote  # noqa: E402
+from app.services import refresh_group_status  # noqa: E402
+
+# pre-clean (re-run safe)
+with SessionLocal() as s:
+    s.query(StudentNote).delete(synchronize_session=False)
+    s.query(Student).delete(synchronize_session=False)
+    s.query(Group).filter(Group.name.in_(["Test guruh A", "Test guruh B"])).delete(synchronize_session=False)
+    s.query(Lead).filter(Lead.phone.in_(["+998935550011", "+998935550022", "+998935550033"])).delete(synchronize_session=False)
+    s.commit()
+
+# group with capacity 1
+client.post("/admin/groups/add", data={"name": "Test guruh A", "course_id": "0", "teacher_id": "0",
+                                       "schedule": "Du-Chor-Ju 16:00", "start_date": "1-dekabr", "capacity": "1"},
+            headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    ga = s.query(Group).filter(Group.name == "Test guruh A").one()
+    assert ga.status == "ochiq" and ga.capacity == 1
+    gid = ga.id
+r = client.get("/admin/groups", headers=auth)
+assert "O'rinlar" in r.text and "To'ldi" in r.text and "Ochiq" in r.text
+print("group capacity + status fields OK")
+
+# lead 1 -> enrolled to the group: student created, group becomes "toldi"
+client.post("/admin/leads/add", data={"full_name": "Kamola Ergasheva", "phone": "935550011", "course": "Trading", "source": "instagram"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    l1 = s.query(Lead).filter(Lead.phone == "+998935550011").one()
+    l1id = l1.id
+r = client.post(f"/admin/leads/{l1id}/status", data={"status": "enrolled", "group_id": str(gid)}, headers=auth)
+assert r.json()["ok"] is True and r.json()["waiting"] is False
+with SessionLocal() as s:
+    st = s.query(Student).filter(Student.lead_id == l1id).one()
+    assert st.full_name == "Kamola Ergasheva" and st.phone == "+998935550011"
+    assert st.status == "faol" and st.group_id == gid and st.source == "instagram"
+    assert st.enrolled_at is not None
+    assert s.get(Group, gid).status == "toldi"  # 1/1 seats filled
+print("lead -> student enrollment + auto 'toldi' OK")
+
+# lead 2 -> enrolled to the FULL group: goes to the waiting list
+client.post("/admin/leads/add", data={"full_name": "Ravshan Qodirov", "phone": "935550022", "course": "Trading", "source": "meta"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    l2 = s.query(Lead).filter(Lead.phone == "+998935550022").one()
+    l2id = l2.id
+r = client.post(f"/admin/leads/{l2id}/move", data={"status": "enrolled", "group_id": str(gid)}, headers=auth)
+assert r.json()["ok"] is True and r.json()["waiting"] is True
+with SessionLocal() as s:
+    st2 = s.query(Student).filter(Student.lead_id == l2id).one()
+    assert st2.status == "navbatda"
+print("full group -> waiting list (navbatda) OK")
+
+# students page: filters + fields render
+r = client.get("/admin/students", headers=auth)
+assert r.status_code == 200 and "Kamola" in r.text and "Navbatda" in r.text
+r = client.get("/admin/students?q=Kamola", headers=auth)
+assert "Kamola" in r.text and "Ravshan" not in r.text
+r = client.get(f"/admin/students?group_id={gid}&status=faol", headers=auth)
+assert "Ravshan" not in r.text
+print("students page + filters OK")
+
+# student status change frees a seat -> group back to "ochiq"
+with SessionLocal() as s:
+    st1 = s.query(Student).filter(Student.lead_id == l1id).one()
+    st1_id = st1.id
+    st2_id = st2.id
+client.post(f"/admin/students/{st1_id}/update", data={"full_name": "Kamola Ergasheva", "phone": "+998935550011", "group_id": str(gid), "status": "toxtatgan"}, headers=auth)
+with SessionLocal() as s:
+    assert s.get(Group, gid).status == "ochiq"  # seat freed
+    st1 = s.get(Student, st1_id)
+    assert st1.status == "toxtatgan"
+# enroll lead 3 into the freed seat -> faol, group "toldi" again
+client.post("/admin/leads/add", data={"full_name": "Zilola Xolmatova", "phone": "935550033", "course": "Trading", "source": "yurish"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    l3id = s.query(Lead).filter(Lead.phone == "+998935550033").one().id
+r = client.post(f"/admin/leads/{l3id}/status", data={"status": "enrolled", "group_id": str(gid)}, headers=auth)
+assert r.json()["ok"] is True and r.json()["waiting"] is False
+with SessionLocal() as s:
+    assert s.get(Group, gid).status == "toldi"
+print("seat freeing + re-fill OK")
+
+# student notes
+client.post(f"/admin/students/{st1_id}/notes", data={"text": "To'xtatdi, oilaviy sabab"}, headers=auth)
+r = client.get(f"/admin/students/{st1_id}/notes", headers=auth)
+assert r.json()["ok"] and "To'xtatdi" in r.json()["notes"][0]["text"]
+print("student notes OK")
+
+# trial lesson: status + date, highlighted when due
+r = client.post(f"/admin/leads/{l2id}/trial", data={"trial_date": "2026-11-01"}, headers=auth)
+assert r.json()["ok"] is True
+r = client.post(f"/admin/leads/{l2id}/status", data={"status": "trial"}, headers=auth)
+assert r.json()["ok"] is True
+r = client.get("/admin/leads", headers=auth)
+assert "Sinov darsi" in r.text and "trial-input" in r.text
+with SessionLocal() as s:
+    assert s.get(Lead, l2id).status == "trial"
+    assert s.get(Lead, l2id).trial_date.isoformat() == "2026-11-01"
+# kanban has the trial column
+r = client.get("/admin/kanban", headers=auth)
+assert 'data-drop="trial"' in r.text and "Bugun" in r.text
+print("trial lesson status + date + kanban column OK")
+
+# Claude knowledge includes the group fill state
+from app.services import build_dynamic_knowledge  # noqa: E402
+assert "GURUH TO'LDI" in build_dynamic_knowledge()
+print("group status in Claude knowledge OK")
+
+# cleanup stage-2 test rows
+client.post(f"/admin/students/{st2_id}/delete", headers=auth)
+client.post(f"/admin/students/{st1_id}/delete", headers=auth)
+with SessionLocal() as s:
+    s.query(Lead).filter(Lead.id.in_([l1id, l2id, l3id])).delete(synchronize_session=False)
+    s.commit()
+client.post(f"/admin/groups/{gid}/delete", headers=auth, follow_redirects=False)
+print("stage-2 cleanup OK")
 # settings page renders
 r = client.get("/admin/settings", headers=auth)
 assert r.status_code == 200 and "Owner chat ID" in r.text

@@ -7,6 +7,8 @@ from datetime import date, datetime, timezone
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -21,26 +23,33 @@ from ..auth import (
 )
 from ..config import settings
 from ..database import SessionLocal
-from ..models import Course, Group, Lead, Teacher
+from ..models import Course, Group, Lead, Student, StudentNote, Teacher
 from ..services import (
     AI_KNOWLEDGE_KEY,
     AI_STYLE_KEY,
+    GROUP_STATUSES,
     REJECT_REASONS,
     ROLES,
     SOURCES,
+    STUDENT_STATUSES,
     TZ,
     add_lead_note,
+    add_student_note,
+    enroll_lead,
     get_ai_text,
     get_all_courses,
     get_employees,
     get_lead_notes,
     get_setting,
+    get_student_notes,
+    get_students_filtered,
     get_teachers,
     get_work_hours,
+    normalize_phone,
     set_ai_text,
     set_setting,
+    set_student_status,
     source_label,
-    normalize_phone,
     upsert_manual_lead,
 )
 
@@ -67,6 +76,7 @@ templates.env.globals["source_label"] = source_label
 STATUS_LABELS = {
     "new": "Yangi",
     "contacted": "Aloqaga chiqildi",
+    "trial": "Sinov darsi",
     "enrolled": "O'qishga yozildi",
     "rejected": "Rad etildi",
 }
@@ -160,6 +170,34 @@ def _parse_date(raw: str) -> date | None:
         raise HTTPException(status_code=400, detail="Sana formati YYYY-MM-DD bo'lishi kerak")
 
 
+def _enroll_groups() -> list[dict]:
+    """Groups for the enrollment dialog (full ones flagged, closed hidden)."""
+    from ..models import Student
+
+    result: list[dict] = []
+    with SessionLocal() as session:
+        groups = session.query(Group).order_by(Group.name, Group.id).all()
+        for group in groups:
+            if group.status == "tugagan" or not group.is_enabled:
+                continue
+            capacity = group.capacity or 0
+            active = (
+                session.query(Student)
+                .filter(Student.group_id == group.id, Student.status == "faol")
+                .count()
+            )
+            result.append(
+                {
+                    "id": group.id,
+                    "name": group.name,
+                    "full": bool(capacity > 0 and active >= capacity),
+                    "capacity": capacity or 0,
+                    "active": active,
+                }
+            )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Pages
 # ---------------------------------------------------------------------------
@@ -206,6 +244,7 @@ def leads_page(
             "reject_reasons": REJECT_REASONS,
             "sources": SOURCES,
             "employees": get_employees(enabled_only=True),
+            "enroll_groups": _enroll_groups(),
             "today": datetime.now(TZ).date(),
             "f_course": course,
             "f_status": status,
@@ -251,29 +290,46 @@ def add_lead_manual(
     return RedirectResponse(url="/admin/leads?saved=1", status_code=303)
 
 
+def _apply_status(lead_id: int, status: str, reason: str, group_id: int) -> dict:
+    """Shared status change: reject reason check + student creation on enroll."""
+    if status not in STATUS_LABELS:
+        return {"ok": False, "error": "Noma'lum holat", "code": 400}
+    if status == "rejected" and reason not in REJECT_REASONS:
+        return {"ok": False, "error": "Rad etish sababi tanlanmagan", "code": 400}
+    with SessionLocal() as session:
+        lead = session.get(Lead, lead_id)
+        if lead is None:
+            return {"ok": False, "error": "Lid topilmadi", "code": 404}
+        lead.status = status
+        lead.reject_reason = reason if status == "rejected" else None
+        session.commit()
+
+    waiting = False
+    student_id = None
+    if status == "enrolled":
+        student, waiting = enroll_lead(lead_id, group_id or None)
+        student_id = student.id
+    log.info("Lead %s status -> %s (reason=%s, group=%s)", lead_id, status, reason or "-", group_id or "-")
+    return {"ok": True, "status": status, "waiting": waiting, "student_id": student_id}
+
+
 @router.post("/leads/{lead_id}/status")
 def update_lead_status(
     lead_id: int,
     status: str = Form(...),
     reason: str = Form(""),
+    group_id: int = Form(0),
     _: str = Depends(check_auth),
 ):
-    """Change a lead's status. "Rad etildi" requires a reject reason."""
-    if status not in STATUS_LABELS:
-        return JSONResponse({"ok": False, "error": "Noma'lum holat"}, status_code=400)
-    if status == "rejected" and reason not in REJECT_REASONS:
-        return JSONResponse(
-            {"ok": False, "error": "Rad etish sababi tanlanmagan"}, status_code=400
-        )
-    with SessionLocal() as session:
-        lead = session.get(Lead, lead_id)
-        if lead is None:
-            return JSONResponse({"ok": False, "error": "Lid topilmadi"}, status_code=404)
-        lead.status = status
-        lead.reject_reason = reason if status == "rejected" else None
-        session.commit()
-        log.info("Lead %s status -> %s (reason=%s)", lead_id, status, reason or "-")
-    return JSONResponse({"ok": True, "status": status})
+    """Change a lead's status.
+
+    "Rad etildi" requires a reject reason; "O'qishga yozildi" creates the
+    student profile (waiting list if the group is full).
+    """
+    result = _apply_status(lead_id, status, reason, group_id)
+    if not result["ok"]:
+        return JSONResponse(result, status_code=result["code"])
+    return JSONResponse(result)
 
 
 @router.post("/leads/{lead_id}/assign")
@@ -307,6 +363,23 @@ def set_followup(
         lead.follow_up_at = _parse_date(follow_up_at)
         session.commit()
         log.info("Lead %s follow_up_at -> %s", lead_id, lead.follow_up_at or "-")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/leads/{lead_id}/trial")
+def set_trial(
+    lead_id: int,
+    trial_date: str = Form(""),
+    _: str = Depends(check_auth),
+):
+    """Set (or clear) the trial lesson date."""
+    with SessionLocal() as session:
+        lead = session.get(Lead, lead_id)
+        if lead is None:
+            return JSONResponse({"ok": False, "error": "Lid topilmadi"}, status_code=404)
+        lead.trial_date = _parse_date(trial_date)
+        session.commit()
+        log.info("Lead %s trial_date -> %s", lead_id, lead.trial_date or "-")
     return JSONResponse({"ok": True})
 
 
@@ -469,7 +542,7 @@ def delete_employee(employee_id: int, _: str = Depends(check_auth)):
 # ---------------------------------------------------------------------------
 
 # Column order on the board; "rejected" is the last, styled differently.
-KANBAN_STATUSES = ["new", "contacted", "enrolled", "rejected"]
+KANBAN_STATUSES = ["new", "contacted", "trial", "enrolled", "rejected"]
 
 
 @router.get("/kanban")
@@ -489,6 +562,7 @@ def kanban_page(request: Request, _: str = Depends(check_auth)):
             session.query(Lead).filter(Lead.created_at >= today_start_utc).count()
         )
     employees = {e.id: e.full_name for e in get_employees()}
+    today = datetime.now(TZ).date()
     cards = [
         {
             "id": lead.id,
@@ -502,8 +576,10 @@ def kanban_page(request: Request, _: str = Depends(check_auth)):
             "assignee": employees.get(lead.assigned_to or 0),
             "follow_up_at": lead.follow_up_at.isoformat() if lead.follow_up_at else "",
             "follow_up_overdue": bool(
-                lead.follow_up_at and lead.follow_up_at < datetime.now(TZ).date()
+                lead.follow_up_at and lead.follow_up_at < today
             ),
+            "trial_date": lead.trial_date.isoformat() if lead.trial_date else "",
+            "trial_due": bool(lead.trial_date and lead.trial_date <= today),
             "repeat": (lead.repeat_count or 0) > 0,
             "reject_reason": REJECT_REASONS.get(lead.reject_reason or ""),
             "updated": _format_tashkent(lead.updated_at),
@@ -514,6 +590,7 @@ def kanban_page(request: Request, _: str = Depends(check_auth)):
         {"status": status, "label": STATUS_LABELS[status]}
         for status in KANBAN_STATUSES
     ]
+    enroll_groups = _enroll_groups()
     return templates.TemplateResponse(
         request,
         "kanban.html",
@@ -521,6 +598,7 @@ def kanban_page(request: Request, _: str = Depends(check_auth)):
             "columns": columns,
             "cards": cards,
             "reject_reasons": REJECT_REASONS,
+            "enroll_groups": enroll_groups,
             "today_count": today_count,
             "total_count": len(cards),
             "active": "kanban",
@@ -533,24 +611,15 @@ def move_lead(
     lead_id: int,
     status: str = Form(...),
     reason: str = Form(""),
+    group_id: int = Form(0),
     _: str = Depends(check_auth),
 ):
     """JSON endpoint for the kanban drag & drop (card moved to a new column)."""
-    if status not in STATUS_LABELS:
-        return JSONResponse({"ok": False, "error": "Noma'lum holat"}, status_code=400)
-    if status == "rejected" and reason not in REJECT_REASONS:
-        return JSONResponse(
-            {"ok": False, "error": "Rad etish sababi tanlanmagan"}, status_code=400
-        )
-    with SessionLocal() as session:
-        lead = session.get(Lead, lead_id)
-        if lead is None:
-            return JSONResponse({"ok": False, "error": "Lid topilmadi"}, status_code=404)
-        lead.status = status
-        lead.reject_reason = reason if status == "rejected" else None
-        session.commit()
-        log.info("Lead %s moved -> %s (kanban, reason=%s)", lead_id, status, reason or "-")
-    return JSONResponse({"ok": True, "lead_id": lead_id, "status": status})
+    result = _apply_status(lead_id, status, reason, group_id)
+    if not result["ok"]:
+        return JSONResponse(result, status_code=result["code"])
+    return JSONResponse({"ok": True, "lead_id": lead_id, "status": status,
+                         "waiting": result.get("waiting", False)})
 
 
 # ---------------------------------------------------------------------------
@@ -718,8 +787,16 @@ def delete_teacher(teacher_id: int, _: None = Depends(check_auth)):
 
 @router.get("/groups")
 def groups_page(request: Request, saved: int = 0, _: None = Depends(check_auth)):
+    from ..models import Student
+
     with SessionLocal() as session:
         groups = session.query(Group).order_by(Group.id).all()
+        active_counts = dict(
+            session.query(Student.group_id, func.count(Student.id))
+            .filter(Student.status == "faol", Student.group_id.isnot(None))
+            .group_by(Student.group_id)
+            .all()
+        )
     return templates.TemplateResponse(
         request,
         "groups.html",
@@ -727,6 +804,8 @@ def groups_page(request: Request, saved: int = 0, _: None = Depends(check_auth))
             "groups": groups,
             "courses": get_all_courses(),
             "teachers": get_teachers(),
+            "group_statuses": GROUP_STATUSES,
+            "g_active": active_counts,
             "saved": saved,
             "active": "groups",
         },
@@ -740,6 +819,7 @@ def add_group(
     teacher_id: int = Form(0),
     schedule: str = Form(""),
     start_date: str = Form(""),
+    capacity: int = Form(0),
     _: None = Depends(check_auth),
 ):
     name = name.strip()
@@ -753,11 +833,13 @@ def add_group(
                 teacher_id=teacher_id or None,
                 schedule=schedule.strip() or None,
                 start_date=start_date.strip() or None,
+                capacity=capacity or None,
+                status="ochiq",
                 is_enabled=True,
             )
         )
         session.commit()
-        log.info("Group added: %s", name)
+        log.info("Group added: %s (capacity=%s)", name, capacity or "-")
     return RedirectResponse(url="/admin/groups?saved=1", status_code=303)
 
 
@@ -769,9 +851,13 @@ def update_group(
     teacher_id: int = Form(0),
     schedule: str = Form(""),
     start_date: str = Form(""),
+    capacity: int = Form(0),
+    status: str = Form(""),
     is_enabled: str = Form(""),
     _: None = Depends(check_auth),
 ):
+    from ..services import refresh_group_status
+
     with SessionLocal() as session:
         group = session.get(Group, group_id)
         if group:
@@ -780,9 +866,15 @@ def update_group(
             group.teacher_id = teacher_id or None
             group.schedule = schedule.strip() or None
             group.start_date = start_date.strip() or None
+            group.capacity = capacity or None
+            # Manual close wins; otherwise the auto fill state is recomputed.
+            group.status = status if status in GROUP_STATUSES else None
             group.is_enabled = is_enabled == "on"
             session.commit()
-            log.info("Group updated: id=%s name=%s", group_id, group.name)
+            if group.status != "tugagan":
+                refresh_group_status(group_id)
+            log.info("Group updated: id=%s name=%s capacity=%s status=%s",
+                     group_id, group.name, capacity or "-", group.status or "-")
     return RedirectResponse(url="/admin/groups?saved=1", status_code=303)
 
 
@@ -795,6 +887,133 @@ def delete_group(group_id: int, _: None = Depends(check_auth)):
             session.commit()
             log.info("Group deleted: id=%s name=%s", group_id, group.name)
     return RedirectResponse(url="/admin/groups?saved=1", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Students (created automatically when a lead is enrolled)
+# ---------------------------------------------------------------------------
+
+@router.get("/students")
+def students_page(
+    request: Request,
+    q: str = "",
+    group_id: int = 0,
+    status: str = "",
+    _: str = Depends(check_auth),
+):
+    students_list = get_students_filtered(q, group_id, status)
+    with SessionLocal() as session:
+        groups = session.query(Group).order_by(Group.name, Group.id).all()
+    query_string = urlencode({"q": q, "group_id": group_id, "status": status})
+    return templates.TemplateResponse(
+        request,
+        "students.html",
+        {
+            "students": students_list,
+            "groups": groups,
+            "student_statuses": STUDENT_STATUSES,
+            "f_q": q,
+            "f_group": group_id,
+            "f_status": status,
+            "query_string": query_string,
+            "active": "students",
+        },
+    )
+
+
+@router.post("/students/{student_id}/update")
+def update_student(
+    student_id: int,
+    full_name: str = Form(""),
+    phone: str = Form(""),
+    group_id: int = Form(0),
+    status: str = Form(""),
+    _: str = Depends(check_auth),
+):
+    """Auto-save a student row (name, phone, group, status)."""
+    from ..models import utcnow
+    from ..services import refresh_group_status
+
+    with SessionLocal() as session:
+        student = session.get(Student, student_id)
+        if student is None:
+            return JSONResponse({"ok": False, "error": "Talaba topilmadi"}, status_code=404)
+        if full_name.strip():
+            student.full_name = full_name.strip()
+        if phone.strip():
+            normalized = normalize_phone(phone)
+            if normalized is None:
+                return JSONResponse({"ok": False, "error": "Telefon noto'g'ri"}, status_code=400)
+            student.phone = normalized
+        old_group = student.group_id
+        student.group_id = group_id or None
+        if status in STUDENT_STATUSES:
+            student.status = status
+        student.updated_at = utcnow()
+        session.commit()
+    for gid in {old_group, group_id or None} - {None}:
+        refresh_group_status(gid)
+    log.info("Student %s updated (status=%s group=%s)", student_id, status or "-", group_id or "-")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/students/{student_id}/delete")
+def delete_student(student_id: int, _: str = Depends(check_auth)):
+    from ..services import refresh_group_status
+
+    with SessionLocal() as session:
+        student = session.get(Student, student_id)
+        if student:
+            group_id = student.group_id
+            session.delete(student)
+            session.commit()
+            if group_id:
+                refresh_group_status(group_id)
+            log.info("Student deleted: id=%s", student_id)
+    return JSONResponse({"ok": True})
+
+
+@router.get("/students/{student_id}/notes")
+def student_notes_list(student_id: int, _: str = Depends(check_auth)):
+    notes = get_student_notes(student_id)
+    return JSONResponse(
+        {
+            "ok": True,
+            "notes": [
+                {
+                    "text": n.text,
+                    "author": n.author or "—",
+                    "created": _format_tashkent(n.created_at),
+                }
+                for n in notes
+            ],
+        }
+    )
+
+
+@router.post("/students/{student_id}/notes")
+def add_student_note_route(
+    student_id: int,
+    text: str = Form(...),
+    user: str = Depends(check_auth),
+):
+    text = text.strip()
+    if not text:
+        return JSONResponse({"ok": False, "error": "Izoh bo'sh"}, status_code=400)
+    with SessionLocal() as session:
+        if session.get(Student, student_id) is None:
+            return JSONResponse({"ok": False, "error": "Talaba topilmadi"}, status_code=404)
+    note = add_student_note(student_id, text, author=user)
+    return JSONResponse(
+        {
+            "ok": True,
+            "note": {
+                "text": note.text,
+                "author": note.author or "—",
+                "created": _format_tashkent(note.created_at),
+            },
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .st-input { width: 150px; }
+  .phone-input { width: 130px; }
+  .st-group, .st-status { max-width: 150px; }
+  .st-badge {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    border-radius: 999px; padding: 2px 9px;
+  }
+  .st-badge.faol { background: #E9F9EF; color: #15803D; }
+  .st-badge.navbatda { background: #FEF3E2; color: #B45309; }
+  .st-badge.tugatgan, .st-badge.toxtatgan { background: #F1F3F9; color: var(--muted); }
+  .note-open { font-size: 12px; color: var(--primary); background: none; border: none; padding: 0; height: auto; cursor: pointer; font-weight: 600; }
+  .note-open:hover { background: none; text-decoration: underline; }
+  .pay-soon { font-size: 12px; color: var(--faint); }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(30, 34, 53, .45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--surface); border-radius: var(--r-lg);
+    box-shadow: var(--sh-md); padding: 22px 24px;
+    max-width: 480px; width: 100%; max-height: 80vh; overflow-y: auto;
+  }
+  .modal h2 { margin-bottom: 12px; }
+  .note-item { border-bottom: 1px solid var(--border); padding: 9px 2px; }
+  .note-item:last-child { border-bottom: none; }
+  .note-item .meta { color: var(--faint); font-size: 12px; margin-top: 3px; }
+  .modal .actions { justify-content: flex-end; margin-top: 14px; }
+</style>
+
+<h1>Talabalar</h1>
+<p class="page-sub">"O'qishga yozildi" holatidagi lidlardan avtomatik yaratiladi. To'lovlar keyingi bosqichda qo'shiladi.</p>
+
+<form method="get" action="/admin/students" class="filters" id="filters">
+  <input type="text" name="q" value="{{ f_q }}" placeholder="Ism yoki telefon" aria-label="Qidirish">
+  <select name="group_id" aria-label="Guruh bo'yicha filtr">
+    <option value="0">Barcha guruhlar</option>
+    {% for g in groups %}
+    <option value="{{ g.id }}" {{ 'selected' if g.id == f_group else '' }}>{{ g.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="status" aria-label="Holat bo'yicha filtr">
+    <option value="">Barcha holatlar</option>
+    {% for value, label in student_statuses.items() %}
+    <option value="{{ value }}" {{ 'selected' if value == f_status else '' }}>{{ label }}</option>
+    {% endfor %}
+  </select>
+</form>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>ID</th><th>Ism</th><th>Telefon</th><th>Guruh</th><th>Holat</th><th>Yozilgan sana</th><th>Izohlar</th></tr>
+  </thead>
+  <tbody>
+  {% for s in students %}
+    <tr data-id="{{ s.id }}">
+      <td>{{ s.id }}</td>
+      <td><input type="text" class="st-input" value="{{ s.full_name or '' }}" data-f="full_name" aria-label="Ism"></td>
+      <td><input type="text" class="phone-input" value="{{ s.phone or '' }}" data-f="phone" aria-label="Telefon"></td>
+      <td>
+        <select class="st-group" data-f="group_id" aria-label="Guruh">
+          <option value="0">— guruhsiz —</option>
+          {% for g in groups %}
+          <option value="{{ g.id }}" {{ 'selected' if s.group_id == g.id else '' }}>{{ g.name }}{% if g.status == 'toldi' %} (to'ldi){% endif %}</option>
+          {% endfor %}
+        </select>
+      </td>
+      <td class="nowrap">
+        <span class="st-badge {{ s.status }}">{{ student_statuses[s.status] }}</span>
+        <select class="st-status" data-f="status" aria-label="Holat">
+          {% for value, label in student_statuses.items() %}
+          <option value="{{ value }}" {{ 'selected' if s.status == value else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </td>
+      <td class="nowrap">{{ s.enrolled_at.strftime('%d.%m.%Y') if s.enrolled_at else '—' }}</td>
+      <td>
+        <button type="button" class="note-open" data-notes="{{ s.id }}">Tarix</button>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="muted">Hozircha talaba yo'q — lidni "O'qishga yozildi" holatiga o'tkazing.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="hint">To'lovlar bo'limi keyingi bosqichda qo'shiladi.</p>
+
+<!-- notes history modal -->
+<div class="modal-backdrop" id="notes-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Talaba izohlari</h2>
+    <div id="notes-list"></div>
+    <div class="actions">
+      <button type="button" class="outline" id="notes-close">Yopish</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // --- filters: auto-apply ---
+  var form = document.getElementById("filters");
+  form.querySelectorAll("input, select").forEach(function (el) {
+    if (el.name === "q") {
+      var debounce = null;
+      el.addEventListener("input", function () {
+        clearTimeout(debounce);
+        debounce = setTimeout(function () { form.submit(); }, 300);
+      });
+      el.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); clearTimeout(debounce); form.submit(); }
+      });
+    } else {
+      el.addEventListener("change", function () { form.submit(); });
+    }
+  });
+
+  // --- auto-save row changes (500ms debounce) ---
+  var timers = {};
+  document.querySelectorAll("tr[data-id]").forEach(function (row) {
+    ["change", "input"].forEach(function (evt) {
+      row.addEventListener(evt, function (e) {
+        if (!e.target.hasAttribute("data-f")) return;
+        clearTimeout(timers[row.dataset.id]);
+        timers[row.dataset.id] = setTimeout(function () { saveRow(row); }, 500);
+      });
+    });
+  });
+
+  function saveRow(row) {
+    var body = new URLSearchParams();
+    var statusSel = row.querySelector("[data-f='status']");
+    body.set("full_name", row.querySelector("[data-f='full_name']").value);
+    body.set("phone", row.querySelector("[data-f='phone']").value);
+    body.set("group_id", row.querySelector("[data-f='group_id']").value);
+    body.set("status", statusSel.value);
+    fetch("/admin/students/" + row.dataset.id + "/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok) { showToast(data.error || "Saqlanmadi"); return; }
+      var badge = row.querySelector(".st-badge");
+      badge.className = "st-badge " + statusSel.value;
+      badge.textContent = statusSel.options[statusSel.selectedIndex].textContent;
+      showToast("Saqlandi");
+    }).catch(function () { showToast("Tarmoq xatosi"); });
+  }
+
+  // --- notes history modal ---
+  var modal = document.getElementById("notes-modal");
+  var list = document.getElementById("notes-list");
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-notes]");
+    if (!btn) return;
+    list.textContent = "Yuklanmoqda...";
+    modal.hidden = false;
+    fetch("/admin/students/" + btn.dataset.notes + "/notes")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        list.textContent = "";
+        if (!data.ok || !data.notes.length) { list.textContent = "Hozircha izoh yo'q."; return; }
+        data.notes.forEach(function (n) {
+          var item = document.createElement("div");
+          item.className = "note-item";
+          var body = document.createElement("div");
+          body.textContent = n.text;
+          var meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = n.created + " · " + n.author;
+          item.appendChild(body);
+          item.appendChild(meta);
+          list.appendChild(item);
+        });
+      })
+      .catch(function () { list.textContent = "Tarmoq xatosi"; });
+  });
+  document.getElementById("notes-close").addEventListener("click", function () { modal.hidden = true; });
+  modal.addEventListener("click", function (e) { if (e.target === modal) modal.hidden = true; });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") modal.hidden = true; });
+})();
+</script>
+{% endblock %}

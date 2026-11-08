@@ -87,8 +87,8 @@
   .modal .actions { justify-content: flex-end; margin-top: 16px; }
 </style>
 
-<h1>Kanban doskasi</h1>
-<p class="page-sub">Kartani ustundan ustunga sudrab, lid bosqichini o'zgartiring. "Rad etildi" ustuniga sudrashda sabab so'raladi.</p>
+<h1>Bugun</h1>
+<p class="page-sub">Kanban doskasi — kartani sudrab bosqichni o'zgartiring. "Rad etildi" uchun sabab, "O'qishga yozildi" uchun guruh so'raladi.</p>
 
 <div class="stats">
   <span class="stat">Jami lidlar<b>{{ total_count }}</b></span>
@@ -97,7 +97,7 @@
 
 <div class="board" id="board">
   {% for col in columns %}
-  <div class="col" data-status="{{ col.status }}" style="--c: {% if col.status == 'new' %}var(--primary){% elif col.status == 'contacted' %}var(--orange){% elif col.status == 'enrolled' %}var(--green){% else %}var(--red){% endif %}">
+  <div class="col" data-status="{{ col.status }}" style="--c: {% if col.status == 'new' %}var(--primary){% elif col.status == 'contacted' %}var(--orange){% elif col.status == 'trial' %}var(--teal){% elif col.status == 'enrolled' %}var(--green){% else %}var(--red){% endif %}">
     <div class="col-head">{{ col.label }} <span class="count" data-count>{{ 0 }}</span></div>
     <div class="col-body" data-drop="{{ col.status }}">
       {% for c in cards if c.status == col.status %}
@@ -112,6 +112,9 @@
           {% if c.assignee %}<span class="badge mut">{{ c.assignee }}</span>{% endif %}
           <span class="badge mut">{{ c.source }}</span>
         </div>
+        {% if c.trial_date %}
+        <div class="fu {{ 'overdue' if c.trial_due else '' }}">Sinov darsi: {{ c.trial_date }}{% if c.trial_due %} (muddati keldi){% endif %}</div>
+        {% endif %}
         {% if c.follow_up_at %}
         <div class="fu {{ 'overdue' if c.follow_up_overdue else '' }}">Keyingi qo'ng'iroq: {{ c.follow_up_at }}{% if c.follow_up_overdue %} (muddati o'tgan){% endif %}</div>
         {% endif %}
@@ -141,6 +144,23 @@
   </div>
 </div>
 
+<!-- enrollment group modal (opens when a card is dropped into "O'qishga yozildi") -->
+<div class="modal-backdrop" id="enroll-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Guruh tanlash</h2>
+    <p>Talaba qaysi guruhga yozilsin? To'lgan guruh tanlansa, talaba navbatga yoziladi.</p>
+    <select id="enroll-group">
+      {% for g in enroll_groups %}
+      <option value="{{ g.id }}">{{ g.name }}{% if g.full %} — TO'LDI (navbatga){% elif g.capacity %} ({{ g.active }}/{{ g.capacity }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <div class="actions">
+      <button type="button" class="outline" id="enroll-cancel">Bekor qilish</button>
+      <button type="button" id="enroll-confirm">Yozish</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   var board = document.getElementById("board");
@@ -149,6 +169,8 @@
 
   var rejectModal = document.getElementById("reject-modal");
   var reasonSelect = document.getElementById("reject-reason");
+  var enrollModal = document.getElementById("enroll-modal");
+  var enrollSelect = document.getElementById("enroll-group");
 
   function recount() {
     document.querySelectorAll(".col").forEach(function (col) {
@@ -157,10 +179,11 @@
     });
   }
 
-  function moveCard(card, status, reason) {
+  function moveCard(card, status, reason, groupId) {
     if (card.dataset.status === status) return;
     var body = new URLSearchParams({ status: status });
     if (reason) body.set("reason", reason);
+    if (groupId) body.set("group_id", groupId);
     fetch("/admin/leads/" + card.dataset.id + "/move", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -173,7 +196,7 @@
         var target = document.querySelector('[data-drop="' + status + '"]');
         target.prepend(card);
         recount();
-        showToast("Lid yangi bosqichga ko'chirildi");
+        showToast(data.waiting ? "Guruh to'lgan — talaba navbatga yozildi" : "Lid yangi bosqichga ko'chirildi");
       })
       .catch(function () { showToast("Tarmoq xatosi"); });
   }
@@ -212,6 +235,11 @@
       rejectModal.hidden = false;
       return;
     }
+    if (status === "enrolled" && dragCard.dataset.status !== "enrolled" && {{ 'true' if enroll_groups else 'false' }}) {
+      pendingMove = dragCard;
+      enrollModal.hidden = false;
+      return;
+    }
     moveCard(dragCard, status);
   });
 
@@ -226,6 +254,19 @@
     var reason = reasonSelect.value;
     rejectModal.hidden = true; pendingMove = null;
     moveCard(card, "rejected", reason);
+  });
+
+  document.getElementById("enroll-cancel").addEventListener("click", function () {
+    enrollModal.hidden = true; pendingMove = null;
+  });
+  enrollModal.addEventListener("click", function (e) { if (e.target === enrollModal) { enrollModal.hidden = true; pendingMove = null; } });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { enrollModal.hidden = true; pendingMove = null; } });
+  document.getElementById("enroll-confirm").addEventListener("click", function () {
+    if (!pendingMove) return;
+    var card = pendingMove;
+    var group = enrollSelect.value;
+    enrollModal.hidden = true; pendingMove = null;
+    moveCard(card, "enrolled", "", group);
   });
 
   recount();
