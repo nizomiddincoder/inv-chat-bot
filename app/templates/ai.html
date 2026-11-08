@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>AI javoblar (Claude)</h1>
+<p class="page-sub">Claude'ning javob uslubi, qo'shimcha bilimlar va sinov oynasi.</p>
 
 {% if not claude_enabled %}
 <div class="flash" style="background:#fff4e5;border-color:#e8a748;color:#7a4d05">
@@ -46,7 +47,7 @@
   {% if test_error %}<p style="color:#c0392b">⚠️ {{ test_error }}</p>{% endif %}
   {% if test_reply is not none %}
     <label>Claude javobi (mijoz ko'radigan ko'rinishda):</label>
-    <div class="card" style="background:#f8fafc;margin-bottom:8px">
+    <div class="card" style="background:var(--bg);margin-bottom:8px">
       <pre style="white-space:pre-wrap;font-family:inherit;margin:0;font-size:14px">{{ test_reply }}</pre>
     </div>
     {% if test_lead %}<p class="muted">🧲 Lid aniqlandi: {{ test_lead }}</p>{% endif %}

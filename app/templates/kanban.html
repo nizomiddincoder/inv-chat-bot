@@ -1,42 +1,85 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  .board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; }
-  .col { background: #eef1f5; border: 1px solid #e2e6ea; border-radius: 8px; min-width: 230px; width: 230px; flex: 0 0 auto; }
-  .col-head { padding: 10px 12px; font-weight: 700; font-size: 14px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--c, #1f3b73); }
-  .col-head .count { background: #fff; border: 1px solid #d5dbe2; border-radius: 10px; padding: 0 8px; font-size: 13px; }
-  .col-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 80px; max-height: 65vh; overflow-y: auto; }
-  .col-body.dragover { background: #dce7f7; outline: 2px dashed #1f3b73; outline-offset: -4px; }
-  .cardk { background: #fff; border: 1px solid #dfe4ea; border-radius: 7px; padding: 9px 10px; cursor: grab; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
-  .cardk.dragging { opacity: .45; }
-  .cardk .name { font-weight: 700; font-size: 14px; }
-  .cardk .meta { color: #556; font-size: 12.5px; margin-top: 2px; }
-  .cardk .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
-  .cardk .time { color: #889; font-size: 11.5px; }
-  .badge { display: inline-block; font-size: 11px; background: #eef2f7; border-radius: 8px; padding: 1px 7px; color: #456; }
-  .cardk select { font-size: 12px; padding: 3px 5px; }
-  .stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-  .stat { background: #fff; border: 1px solid #e2e6ea; border-radius: 8px; padding: 8px 14px; font-size: 14px; }
-  .stat b { font-size: 17px; }
-  #toast { position: fixed; bottom: 18px; right: 18px; background: #1f3b73; color: #fff; padding: 10px 16px; border-radius: 7px; font-size: 14px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  .board { display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; padding-bottom: 14px; }
+  .col {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: var(--sh-sm);
+    min-width: 240px; width: 240px; flex: 0 0 auto;
+  }
+  .col-head {
+    padding: 12px 14px;
+    font-weight: 600; font-size: 14px;
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 2px solid var(--c, var(--primary));
+  }
+  .col-head .count {
+    background: var(--tint); color: var(--primary-deep);
+    border-radius: 999px; padding: 1px 9px; font-size: 12.5px; font-weight: 600;
+  }
+  .col-body {
+    padding: 10px; display: flex; flex-direction: column; gap: 10px;
+    min-height: 80px; max-height: 62vh; overflow-y: auto;
+  }
+  .col-body.dragover { background: var(--tint); outline: 2px dashed var(--primary); outline-offset: -5px; }
+  .kcard {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 11px 12px;
+    cursor: grab;
+    box-shadow: 0 1px 2px rgba(30,34,53,.05);
+  }
+  .kcard.dragging { opacity: .45; }
+  .kcard .name { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 14px; }
+  .kcard .avatar {
+    width: 30px; height: 30px; flex: 0 0 auto; border-radius: 50%;
+    background: var(--c, var(--primary)); color: #fff;
+    font-size: 11.5px; font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .kcard .meta { color: var(--muted); font-size: 12.5px; margin-top: 5px; }
+  .kcard .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; gap: 8px; }
+  .kcard .time { color: var(--faint); font-size: 11.5px; }
+  .kcard select { font-size: 12px; padding: 4px 7px; max-width: 132px; }
+  .badge {
+    display: inline-block; font-size: 11px; background: var(--tint);
+    border-radius: 999px; padding: 1px 7px; color: var(--primary-deep); font-weight: 500;
+  }
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .stat {
+    background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-sm);
+    padding: 10px 18px; font-size: 13.5px; color: var(--muted);
+  }
+  .stat b { font-size: 17px; color: var(--text); font-weight: 700; margin-left: 4px; }
+  #toast {
+    position: fixed; bottom: 18px; right: 18px;
+    background: var(--primary); color: #fff;
+    padding: 11px 18px; border-radius: var(--r-md); font-size: 14px; font-weight: 500;
+    box-shadow: var(--sh-md);
+    opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
   #toast.show { opacity: 1; }
 </style>
 
-<h1>CRM — Kanban doskasi</h1>
+<h1>Kanban doskasi</h1>
+<p class="page-sub">Kartani ustundan ustunga sudrab, lid bosqichini o'zgartiring.</p>
 
 <div class="stats">
-  <span class="stat">Jami lidlar: <b>{{ total_count }}</b></span>
-  <span class="stat">Bugun: <b>{{ today_count }}</b></span>
+  <span class="stat">Jami lidlar<b>{{ total_count }}</b></span>
+  <span class="stat">Bugun<b>{{ today_count }}</b></span>
 </div>
 
 <div class="board" id="board">
   {% for col in columns %}
-  <div class="col" data-status="{{ col.status }}" style="--c: {% if col.status == 'new' %}#1f3b73{% elif col.status == 'contacted' %}#b9770e{% elif col.status == 'enrolled' %}#1e8449{% else %}#c0392b{% endif %}">
+  <div class="col" data-status="{{ col.status }}" style="--c: {% if col.status == 'new' %}var(--primary){% elif col.status == 'contacted' %}var(--orange){% elif col.status == 'enrolled' %}var(--green){% else %}var(--red){% endif %}">
     <div class="col-head">{{ col.label }} <span class="count" data-count>{{ 0 }}</span></div>
     <div class="col-body" data-drop="{{ col.status }}">
       {% for c in cards if c.status == col.status %}
-      <div class="cardk" draggable="true" data-id="{{ c.id }}" data-status="{{ c.status }}">
-        <div class="name">{{ c.full_name }}</div>
+      <div class="kcard" draggable="true" data-id="{{ c.id }}" data-status="{{ c.status }}">
+        <div class="name"><span class="avatar">{{ c.full_name[:2] | upper }}</span>{{ c.full_name }}</div>
         <div class="meta">📞 {{ c.phone }}<br>📚 {{ c.course }}{% if c.username %} &nbsp;<span class="badge">@{{ c.username }}</span>{% endif %}</div>
         {% if c.notes %}<div class="meta">📝 {{ c.notes[:60] }}</div>{% endif %}
         <div class="foot">
@@ -69,7 +112,7 @@
 
   function recount() {
     document.querySelectorAll(".col").forEach(function (col) {
-      var n = col.querySelectorAll(".cardk").length;
+      var n = col.querySelectorAll(".kcard").length;
       col.querySelector("[data-count]").textContent = n;
     });
   }
@@ -97,7 +140,7 @@
   }
 
   board.addEventListener("dragstart", function (e) {
-    var card = e.target.closest(".cardk");
+    var card = e.target.closest(".kcard");
     if (!card) return;
     dragCard = card;
     card.classList.add("dragging");
@@ -131,7 +174,7 @@
   board.addEventListener("change", function (e) {
     var sel = e.target.closest("select[data-move]");
     if (!sel) return;
-    var card = sel.closest(".cardk");
+    var card = sel.closest(".kcard");
     moveCard(card, sel.value);
   });
 

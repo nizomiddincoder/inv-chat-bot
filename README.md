@@ -114,6 +114,11 @@ The bot must be connected to the center's **Premium** Telegram account:
 
 Open `https://YOUR-RAILWAY-URL/admin` and log in with `ADMIN_USER` / `ADMIN_PASSWORD`.
 
+The panel follows the **Markaz CRM design system**: Inter font, indigo primary
+(#5B6CF0), soft lavender background, white cards with 12–16px rounded corners
+and soft shadows, a left sidebar navigation, and color-coded statuses
+(indigo = Yangi, orange = Aloqaga chiqildi, green = O'qishga yozildi, red = Rad etildi).
+
 | Page | What it does |
 |------|--------------|
 | **Kanban** *(main page)* | CRM board: every lead is a card, columns are pipeline stages (Yangi → Aloqaga chiqildi → O'qishga yozildi / Rad etildi). **Drag & drop** a card to move the lead to the next stage — saved instantly. Counts per column + today's leads at the top; a small select on each card works as a drag-free fallback (touch screens). |

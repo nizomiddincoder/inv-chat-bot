@@ -3,51 +3,203 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Inventor admin</title>
+  <title>Inventor admin — Markaz</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    /* ============ Design tokens (Markaz CRM) ============ */
+    :root {
+      --primary: #5B6CF0;
+      --primary-2: #7C89F5;
+      --primary-deep: #4350C9;
+      --bg: #F4F5FD;
+      --surface: #FFFFFF;
+      --text: #1E2235;
+      --muted: #6B7180;
+      --faint: #9AA0B0;
+      --border: #E6E8F4;
+      --tint: #EEF0FD;
+      --green: #22C55E;
+      --orange: #F59E0B;
+      --red: #EF4444;
+      --teal: #14B8A6;
+      --r-sm: 8px;
+      --r-md: 12px;
+      --r-lg: 16px;
+      --sh-sm: 0 1px 2px rgba(30,34,53,.05), 0 2px 8px rgba(91,108,240,.06);
+      --sh-md: 0 4px 16px rgba(91,108,240,.10), 0 2px 6px rgba(30,34,53,.05);
+    }
     * { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Arial, sans-serif; margin: 0; background: #f4f6f8; color: #222; }
-    nav { background: #1f3b73; padding: 10px 16px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
-    nav .brand { color: #fff; font-weight: 700; margin-right: 8px; }
-    nav a { color: #d5e0f5; text-decoration: none; font-weight: 600; padding: 4px 8px; border-radius: 4px; }
-    nav a.active, nav a:hover { color: #fff; background: rgba(255,255,255,.12); }
-    main { max-width: 1050px; margin: 16px auto; padding: 0 12px; }
-    h1 { font-size: 22px; }
-    .table-wrap { overflow-x: auto; background: #fff; border: 1px solid #e2e6ea; border-radius: 8px; }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 700px; }
-    th, td { border-bottom: 1px solid #e9edf1; padding: 8px 10px; text-align: left; vertical-align: middle; }
-    th { background: #eef2f7; white-space: nowrap; }
-    tr:hover td { background: #fafbfc; }
-    input, select, textarea, button { padding: 6px 9px; font-size: 14px; border: 1px solid #c9d1d9; border-radius: 5px; background: #fff; }
-    textarea { width: 100%; min-height: 90px; font-family: inherit; }
-    button { background: #1f3b73; color: #fff; border: none; cursor: pointer; font-weight: 600; }
-    button:hover { background: #2a4d94; }
-    button.danger { background: #c0392b; }
-    button.small { padding: 4px 8px; font-size: 13px; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ============ Shell: sidebar + main ============ */
+    .shell { display: flex; min-height: 100vh; }
+    .side {
+      width: 216px; flex: 0 0 auto;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 20px 14px;
+      display: flex; flex-direction: column; gap: 4px;
+      position: sticky; top: 0; height: 100vh;
+    }
+    .logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 20px; }
+    .logo-mark {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: var(--primary); color: #fff;
+      font-weight: 700; font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo-name { font-size: 16px; font-weight: 600; }
+    .side nav { display: flex; flex-direction: column; gap: 4px; }
+    .side nav a {
+      position: relative;
+      color: var(--muted); text-decoration: none;
+      font-size: 14px; font-weight: 500;
+      padding: 10px 12px; border-radius: var(--r-sm);
+    }
+    .side nav a:hover { color: var(--text); background: #F7F8FE; }
+    .side nav a.active { color: var(--primary); background: var(--tint); }
+    .side nav a.active::before {
+      content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+      width: 3px; border-radius: 2px; background: var(--primary);
+    }
+    .side-foot { margin-top: auto; padding: 10px 12px 2px; color: var(--faint); font-size: 12px; }
+
+    main {
+      flex: 1 1 auto; min-width: 0;
+      padding: 24px 28px 40px;
+      max-width: 1220px;
+    }
+
+    /* ============ Typography ============ */
+    h1 { font-size: 22px; font-weight: 700; letter-spacing: -.2px; margin: 0 0 18px; }
+    h2 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+    .page-sub { color: var(--muted); font-size: 13px; margin: -12px 0 18px; }
+
+    /* ============ Cards ============ */
+    .card {
+      background: var(--surface);
+      border-radius: var(--r-lg);
+      box-shadow: var(--sh-sm);
+      padding: 18px 20px;
+      margin-bottom: 18px;
+    }
+    .card h2 { margin-top: 0; }
+
+    /* ============ Flash ============ */
+    .flash {
+      background: #E9F9EF; border: 1px solid #B7E7C7; color: #15803D;
+      padding: 10px 14px; border-radius: var(--r-md); margin-bottom: 18px;
+      font-weight: 500;
+    }
+
+    /* ============ Forms ============ */
+    label { display: block; margin: 12px 0 4px; font-weight: 600; font-size: 13.5px; }
+    input, select, textarea, button {
+      font-family: inherit; font-size: 14px;
+      border: 1px solid var(--border); border-radius: var(--r-sm);
+      background: var(--surface); color: var(--text);
+      padding: 8px 11px;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: 2px solid var(--primary-2); outline-offset: 0; border-color: var(--primary);
+    }
+    textarea { width: 100%; min-height: 90px; resize: vertical; }
+    button {
+      background: var(--primary); color: #fff; border: none;
+      font-weight: 600; cursor: pointer;
+      padding: 8px 16px; border-radius: var(--r-sm);
+    }
+    button:hover { background: var(--primary-deep); }
+    button.small { padding: 5px 12px; font-size: 13px; }
+    button.danger { background: var(--red); }
+    button.danger:hover { background: #DC2626; }
+
     form.inline { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-    .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
-    .card { background: #fff; border: 1px solid #e2e6ea; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    .card h2 { margin-top: 0; font-size: 17px; }
-    label { display: block; margin: 10px 0 4px; font-weight: 600; font-size: 14px; }
-    .hint { color: #667; font-size: 13px; font-weight: 400; }
-    .flash { background: #e6f7e6; border: 1px solid #9c6; color: #265a26; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; }
-    a.btn { display: inline-block; padding: 6px 10px; background: #1f3b73; color: #fff; text-decoration: none; border-radius: 5px; font-size: 14px; font-weight: 600; }
-    .muted { color: #778; font-size: 13px; }
-    code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+    .filters {
+      display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+      background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-sm);
+      padding: 14px 16px; margin-bottom: 18px;
+    }
+
+    /* ============ Tables ============ */
+    .table-wrap {
+      background: var(--surface); border-radius: var(--r-lg);
+      box-shadow: var(--sh-sm); overflow-x: auto; padding: 6px 6px 2px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 720px; }
+    th {
+      text-align: left; white-space: nowrap;
+      font-size: 11px; font-weight: 500; letter-spacing: .4px; text-transform: uppercase;
+      color: var(--faint); padding: 12px 12px 8px;
+    }
+    td { padding: 11px 12px; border-top: 1px solid var(--border); vertical-align: middle; }
+    tr:hover td { background: #FAFBFE; }
+    td a { color: var(--primary); text-decoration: none; font-weight: 500; }
+    td a:hover { text-decoration: underline; }
+
+    /* ============ Misc ============ */
+    .hint { color: var(--muted); font-size: 13px; font-weight: 400; margin: 6px 0; }
+    .muted { color: var(--muted); }
+    .btn {
+      display: inline-block; padding: 8px 16px;
+      background: var(--primary); color: #fff;
+      text-decoration: none; border-radius: var(--r-sm);
+      font-size: 14px; font-weight: 600;
+    }
+    .btn:hover { background: var(--primary-deep); }
+    code {
+      background: var(--tint); color: var(--primary-deep);
+      padding: 2px 6px; border-radius: 6px; font-size: 12.5px;
+    }
+
+    /* Status dots (new | contacted | enrolled | rejected) */
+    .st-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+    .st-new { background: var(--primary); }
+    .st-contacted { background: var(--orange); }
+    .st-enrolled { background: var(--green); }
+    .st-rejected { background: var(--red); }
+
+    @media (max-width: 900px) {
+      .shell { flex-direction: column; }
+      .side { width: 100%; height: auto; position: static; flex-direction: row; align-items: center; flex-wrap: wrap; padding: 12px 16px; }
+      .logo { padding: 0 10px 0 0; }
+      .side nav { flex-direction: row; flex-wrap: wrap; }
+      .side nav a.active::before { left: 8px; right: 8px; top: auto; bottom: 0; width: auto; height: 3px; }
+      .side-foot { display: none; }
+      main { padding: 18px 16px 32px; }
+    }
   </style>
 </head>
 <body>
-  <nav>
-    <span class="brand">Inventor Innovation Center</span>
-    <a href="/admin/kanban" class="{{ 'active' if active == 'kanban' else '' }}">Kanban</a>
-    <a href="/admin/leads" class="{{ 'active' if active == 'leads' else '' }}">Lidlar</a>
-    <a href="/admin/courses" class="{{ 'active' if active == 'courses' else '' }}">Kurslar</a>
-    <a href="/admin/ai" class="{{ 'active' if active == 'ai' else '' }}">AI Javoblar</a>
-    <a href="/admin/settings" class="{{ 'active' if active == 'settings' else '' }}">Sozlamalar</a>
-  </nav>
-  <main>
-    {% if saved %}<div class="flash">✅ Saqlandi</div>{% endif %}
-    {% block content %}{% endblock %}
-  </main>
+  <div class="shell">
+    <aside class="side">
+      <div class="logo">
+        <div class="logo-mark">M</div>
+        <div class="logo-name">Markaz</div>
+      </div>
+      <nav>
+        <a href="/admin/kanban" class="{{ 'active' if active == 'kanban' else '' }}">Kanban doskasi</a>
+        <a href="/admin/leads" class="{{ 'active' if active == 'leads' else '' }}">Lidlar</a>
+        <a href="/admin/courses" class="{{ 'active' if active == 'courses' else '' }}">Kurslar</a>
+        <a href="/admin/ai" class="{{ 'active' if active == 'ai' else '' }}">AI Javoblar</a>
+        <a href="/admin/settings" class="{{ 'active' if active == 'settings' else '' }}">Sozlamalar</a>
+      </nav>
+      <div class="side-foot">Inventor Innovation Center</div>
+    </aside>
+    <main>
+      {% if saved %}<div class="flash">✅ Saqlandi</div>{% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
 </body>
 </html>

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Lidlar</h1>
+<p class="page-sub">Barcha lidlar — filtrlash, izoh va CSV eksport.</p>
 
 <form method="get" action="/admin/leads" class="filters">
   <select name="course">
@@ -35,7 +36,7 @@
     <td>{% if lead.username %}@{{ lead.username }}{% else %}—{% endif %}</td>
     <td>
       <form method="post" action="/admin/leads/{{ lead.id }}/status" class="inline">
-        <select name="status">
+        <span class="st-dot st-{{ lead.status }}"></span><select name="status">
           {% for value, label in status_labels.items() %}
             <option value="{{ value }}" {{ 'selected' if value == lead.status else '' }}>{{ label }}</option>
           {% endfor %}
