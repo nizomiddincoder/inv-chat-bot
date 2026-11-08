@@ -116,6 +116,7 @@ Open `https://YOUR-RAILWAY-URL/admin` and log in with `ADMIN_USER` / `ADMIN_PASS
 
 | Page | What it does |
 |------|--------------|
+| **Kanban** *(main page)* | CRM board: every lead is a card, columns are pipeline stages (Yangi → Aloqaga chiqildi → O'qishga yozildi / Rad etildi). **Drag & drop** a card to move the lead to the next stage — saved instantly. Counts per column + today's leads at the top; a small select on each card works as a drag-free fallback (touch screens). |
 | **Lidlar** | All leads. Filter by course/status, search by name or phone, change status, add notes, download CSV (opens in Excel). |
 | **Kurslar** | Add / edit / delete / enable / disable courses. Changes the bot's buttons **immediately**. |
 | **AI Javoblar** | Tune Claude's answer style (professional prompt) + extra knowledge + a **sandbox test window** to preview answers without sending anything. See the section below. |
@@ -214,7 +215,8 @@ depends on `OWNER_CHAT_ID`.
 9. ✅ Ask the same friend to go through the flow again → **no duplicate lead**, the existing row is updated.
 10. ✅ In **Kurslar** disable a course → the friend sends "bekor qilish" → the disabled course no longer shows as a button.
 11. ✅ In **AI Javoblar** change the style prompt → use the sandbox test window to preview the new answer style.
-12. ✅ Export CSV from the Lidlar page and open it in Excel — Uzbek letters look correct.
+12. ✅ On the **Kanban** board drag the new lead's card to "Aloqaga chiqildi" → reload → the card stays in the new column (and `/admin/leads` shows the changed status).
+13. ✅ Export CSV from the Lidlar page and open it in Excel — Uzbek letters look correct.
 
 ## Local testing (optional, for a developer)
 

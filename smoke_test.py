@@ -302,6 +302,28 @@ assert "Lidlar" in r.text
 # courses page renders
 r = client.get("/admin/courses", headers=auth)
 assert r.status_code == 200 and "Kurslar" in r.text
+# kanban board is the CRM landing page and renders all 4 columns
+r = client.get("/admin", headers=auth, follow_redirects=False)
+assert r.status_code == 302 and "/admin/kanban" in r.headers["location"], r.headers
+r = client.get("/admin/kanban", headers=auth)
+assert r.status_code == 200, r.status_code
+assert "Kanban doskasi" in r.text
+for label in ("Yangi", "Aloqaga chiqildi", "qishga yozildi", "Rad etildi"):
+    assert label in r.text, label  # note: apostrophes are HTML-escaped
+assert "data-drop=\"new\"" in r.text  # drag&drop columns rendered
+with SessionLocal() as s:
+    some_lead = s.query(Lead).first()
+    assert some_lead is not None
+    lead_id, old_status = some_lead.id, some_lead.status
+# move endpoint changes the lead status like a drag & drop would
+target = "enrolled" if old_status != "enrolled" else "contacted"
+r = client.post(f"/admin/leads/{lead_id}/move", data={"status": target}, headers=auth)
+assert r.status_code == 200 and r.json() == {"ok": True, "lead_id": lead_id, "status": target}
+with SessionLocal() as s:
+    assert s.get(Lead, lead_id).status == target
+r = client.post(f"/admin/leads/{lead_id}/move", data={"status": "bogus"}, headers=auth)
+assert r.json().get("ok") is False
+print("kanban board + move endpoint OK")
 # old messages page is gone, replaced by the AI page
 r = client.get("/admin/messages", headers=auth, follow_redirects=False)
 assert r.status_code == 404, r.status_code

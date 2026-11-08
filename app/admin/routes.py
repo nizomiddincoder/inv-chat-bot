@@ -100,7 +100,7 @@ def _filtered_leads(course: str, status: str, q: str) -> list[Lead]:
 @router.get("")
 @router.get("/")
 def index(_: None = Depends(check_auth)) -> RedirectResponse:
-    return RedirectResponse(url="/admin/leads", status_code=302)
+    return RedirectResponse(url="/admin/kanban", status_code=302)
 
 
 @router.get("/leads")
@@ -191,6 +191,75 @@ def export_csv(course: str = "", status: str = "", q: str = "", _: None = Depend
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=leads.csv"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Kanban board (CRM pipeline)
+# ---------------------------------------------------------------------------
+
+# Column order on the board; "rejected" is the last, styled differently.
+KANBAN_STATUSES = ["new", "contacted", "enrolled", "rejected"]
+
+
+@router.get("/kanban")
+def kanban_page(request: Request, _: None = Depends(check_auth)):
+    """CRM board: every lead is a card, columns are pipeline stages."""
+    today_start_utc = datetime.now(TZ).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).astimezone(timezone.utc)
+    with SessionLocal() as session:
+        leads = (
+            session.query(Lead)
+            .order_by(Lead.updated_at.desc())
+            .limit(500)
+            .all()
+        )
+        today_count = (
+            session.query(Lead).filter(Lead.created_at >= today_start_utc).count()
+        )
+    cards = [
+        {
+            "id": lead.id,
+            "full_name": lead.full_name or "Noma'lum",
+            "phone": lead.phone or "—",
+            "course": lead.course or "—",
+            "status": lead.status,
+            "username": lead.username,
+            "notes": lead.notes,
+            "updated": _format_tashkent(lead.updated_at),
+        }
+        for lead in leads
+    ]
+    columns = [
+        {"status": status, "label": STATUS_LABELS[status]}
+        for status in KANBAN_STATUSES
+    ]
+    return templates.TemplateResponse(
+        request,
+        "kanban.html",
+        {
+            "columns": columns,
+            "cards": cards,
+            "today_count": today_count,
+            "total_count": len(cards),
+            "active": "kanban",
+        },
+    )
+
+
+@router.post("/leads/{lead_id}/move")
+def move_lead(lead_id: int, status: str = Form(...), _: None = Depends(check_auth)):
+    """JSON endpoint for the kanban drag & drop (card moved to a new column)."""
+    if status not in STATUS_LABELS:
+        return {"ok": False, "error": "unknown status"}
+    with SessionLocal() as session:
+        lead = session.get(Lead, lead_id)
+        if lead is None:
+            return {"ok": False, "error": "lead not found"}
+        lead.status = status
+        session.commit()
+        log.info("Lead %s moved -> %s (kanban)", lead_id, status)
+    return {"ok": True, "lead_id": lead_id, "status": status}
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; }
+  .col { background: #eef1f5; border: 1px solid #e2e6ea; border-radius: 8px; min-width: 230px; width: 230px; flex: 0 0 auto; }
+  .col-head { padding: 10px 12px; font-weight: 700; font-size: 14px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--c, #1f3b73); }
+  .col-head .count { background: #fff; border: 1px solid #d5dbe2; border-radius: 10px; padding: 0 8px; font-size: 13px; }
+  .col-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 80px; max-height: 65vh; overflow-y: auto; }
+  .col-body.dragover { background: #dce7f7; outline: 2px dashed #1f3b73; outline-offset: -4px; }
+  .cardk { background: #fff; border: 1px solid #dfe4ea; border-radius: 7px; padding: 9px 10px; cursor: grab; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .cardk.dragging { opacity: .45; }
+  .cardk .name { font-weight: 700; font-size: 14px; }
+  .cardk .meta { color: #556; font-size: 12.5px; margin-top: 2px; }
+  .cardk .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+  .cardk .time { color: #889; font-size: 11.5px; }
+  .badge { display: inline-block; font-size: 11px; background: #eef2f7; border-radius: 8px; padding: 1px 7px; color: #456; }
+  .cardk select { font-size: 12px; padding: 3px 5px; }
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .stat { background: #fff; border: 1px solid #e2e6ea; border-radius: 8px; padding: 8px 14px; font-size: 14px; }
+  .stat b { font-size: 17px; }
+  #toast { position: fixed; bottom: 18px; right: 18px; background: #1f3b73; color: #fff; padding: 10px 16px; border-radius: 7px; font-size: 14px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+
+<h1>CRM — Kanban doskasi</h1>
+
+<div class="stats">
+  <span class="stat">Jami lidlar: <b>{{ total_count }}</b></span>
+  <span class="stat">Bugun: <b>{{ today_count }}</b></span>
+</div>
+
+<div class="board" id="board">
+  {% for col in columns %}
+  <div class="col" data-status="{{ col.status }}" style="--c: {% if col.status == 'new' %}#1f3b73{% elif col.status == 'contacted' %}#b9770e{% elif col.status == 'enrolled' %}#1e8449{% else %}#c0392b{% endif %}">
+    <div class="col-head">{{ col.label }} <span class="count" data-count>{{ 0 }}</span></div>
+    <div class="col-body" data-drop="{{ col.status }}">
+      {% for c in cards if c.status == col.status %}
+      <div class="cardk" draggable="true" data-id="{{ c.id }}" data-status="{{ c.status }}">
+        <div class="name">{{ c.full_name }}</div>
+        <div class="meta">📞 {{ c.phone }}<br>📚 {{ c.course }}{% if c.username %} &nbsp;<span class="badge">@{{ c.username }}</span>{% endif %}</div>
+        {% if c.notes %}<div class="meta">📝 {{ c.notes[:60] }}</div>{% endif %}
+        <div class="foot">
+          <span class="time">{{ c.updated }}</span>
+          <select data-move title="Bosqichni o'zgartirish (sudrab ham bo'ladi)">
+            {% for col2 in columns %}
+            <option value="{{ col2.status }}" {{ 'selected' if col2.status == c.status else '' }}>{{ col2.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+<div id="toast"></div>
+
+<script>
+(function () {
+  var board = document.getElementById("board");
+  var toast = document.getElementById("toast");
+  var dragCard = null;
+
+  function toastMsg(text) {
+    toast.textContent = text;
+    toast.classList.add("show");
+    setTimeout(function () { toast.classList.remove("show"); }, 2200);
+  }
+
+  function recount() {
+    document.querySelectorAll(".col").forEach(function (col) {
+      var n = col.querySelectorAll(".cardk").length;
+      col.querySelector("[data-count]").textContent = n;
+    });
+  }
+
+  function moveCard(card, status) {
+    if (card.dataset.status === status) return;
+    var id = card.dataset.id;
+    var body = new URLSearchParams({ status: status });
+    fetch("/admin/leads/" + id + "/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) { toastMsg("❌ Saqlanmadi: " + (data.error || "xato")); return; }
+        card.dataset.status = status;
+        var target = document.querySelector('[data-drop="' + status + '"]');
+        target.prepend(card);
+        card.querySelector("select[data-move]").value = status;
+        recount();
+        toastMsg("✅ Lid yangi bosqichga ko'chirildi");
+      })
+      .catch(function () { toastMsg("❌ Tarmoq xatosi"); });
+  }
+
+  board.addEventListener("dragstart", function (e) {
+    var card = e.target.closest(".cardk");
+    if (!card) return;
+    dragCard = card;
+    card.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", card.dataset.id); } catch (err) {}
+  });
+  board.addEventListener("dragend", function () {
+    if (dragCard) dragCard.classList.remove("dragging");
+    dragCard = null;
+  });
+  board.addEventListener("dragover", function (e) {
+    var body = e.target.closest(".col-body");
+    if (!body) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    body.classList.add("dragover");
+  });
+  board.addEventListener("dragleave", function (e) {
+    var body = e.target.closest(".col-body");
+    if (body) body.classList.remove("dragover");
+  });
+  board.addEventListener("drop", function (e) {
+    var body = e.target.closest(".col-body");
+    if (!body || !dragCard) return;
+    e.preventDefault();
+    body.classList.remove("dragover");
+    moveCard(dragCard, body.dataset.drop);
+  });
+
+  // Fallback without dragging: the small select on each card
+  board.addEventListener("change", function (e) {
+    var sel = e.target.closest("select[data-move]");
+    if (!sel) return;
+    var card = sel.closest(".cardk");
+    moveCard(card, sel.value);
+  });
+
+  recount();
+})();
+</script>
+{% endblock %}
