@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from .. import claude_client
+from .. import ai_service
 from ..auth import (
     SESSION_COOKIE,
     SESSION_TTL_SECONDS,
@@ -45,7 +45,7 @@ from ..models import (
 )
 from ..services import (
     AI_KNOWLEDGE_KEY,
-    AI_STYLE_KEY,
+    AI_SYSTEM_KEY,
     GROUP_STATUSES,
     PAYMENT_METHODS,
     REJECT_REASONS,
@@ -1943,10 +1943,11 @@ def add_student_note_route(
 
 
 # ---------------------------------------------------------------------------
-# AI answers (Claude): style prompt, extra knowledge, sandbox test window
+# AI answers: system prompt (JEY), extra knowledge, tools log, sandbox window
 # ---------------------------------------------------------------------------
 
 AI_TEXT_LIMIT = 8000  # safety cap for the textareas
+AI_LOGS_ON_PAGE = 20
 
 
 def _ai_page_context(
@@ -1954,18 +1955,29 @@ def _ai_page_context(
     test_message: str = "",
     test_reply: str | None = None,
     test_lead: str | None = None,
+    test_tools: list[dict] | None = None,
     test_error: str | None = None,
 ) -> dict:
     """Template context for the AI Javoblar page (GET and test POST)."""
+    from ..models import AiLog
+
+    with SessionLocal() as session:
+        logs = session.query(AiLog).order_by(AiLog.id.desc()).limit(AI_LOGS_ON_PAGE).all()
+    for row in logs:
+        row.tool_count = row.tool_calls.count('"name":') if row.tool_calls else 0
     return {
-        "style_prompt": get_ai_text(AI_STYLE_KEY) or claude_client.DEFAULT_STYLE_PROMPT,
+        "system_prompt": get_ai_text(AI_SYSTEM_KEY) or ai_service.DEFAULT_SYSTEM_PROMPT,
         "extra_knowledge": get_ai_text(AI_KNOWLEDGE_KEY) or "",
-        "knowledge_files": [name for name, _ in claude_client.load_knowledge()],
-        "claude_enabled": claude_client.is_enabled(),
+        "knowledge_files": [name for name, _ in ai_service.load_knowledge()],
+        "ai_enabled": ai_service.is_enabled(),
         "model": settings.CLAUDE_MODEL,
+        "provider": settings.LLM_PROVIDER,
+        "tools": [t["name"] for t in ai_service.TOOLS_SPEC],
+        "ai_logs": logs,
         "test_message": test_message,
         "test_reply": test_reply,
         "test_lead": test_lead,
+        "test_tools": test_tools or [],
         "test_error": test_error,
         "saved": saved,
         "active": "ai",
@@ -1981,46 +1993,46 @@ def ai_page(request: Request, saved: int = 0, _: None = Depends(check_auth)):
 
 @router.post("/ai")
 def save_ai(
-    style_prompt: str = Form(...),
+    system_prompt: str = Form(...),
     extra_knowledge: str = Form(""),
     _: None = Depends(check_auth),
 ):
-    # Empty style -> the code default (professional preset) is used again.
-    set_ai_text(AI_STYLE_KEY, style_prompt.strip()[:AI_TEXT_LIMIT])
+    # Empty system prompt -> the code default (JEY preset) is used again.
+    set_ai_text(AI_SYSTEM_KEY, system_prompt.strip()[:AI_TEXT_LIMIT])
     set_ai_text(AI_KNOWLEDGE_KEY, extra_knowledge.strip()[:AI_TEXT_LIMIT])
-    log.info("AI settings saved: style=%d chars, extra knowledge=%d chars",
-             len(style_prompt), len(extra_knowledge))
+    log.info("AI settings saved: system prompt=%d chars, extra knowledge=%d chars",
+             len(system_prompt), len(extra_knowledge))
     return RedirectResponse(url="/admin/ai?saved=1", status_code=303)
 
 
 @router.post("/ai/test")
-def test_ai(request: Request, message: str = Form(...), _: None = Depends(check_auth)):
-    """Sandbox: run one visitor message through Claude with the SAVED settings.
-
-    Nothing is sent to any chat — the reply is only shown on this page.
-    """
+def test_ai(request: Request, message: str = Form(...), user: str = Depends(check_auth)):
+    """Sandbox: one visitor message through the full AI pipeline (prompt +
+    tools), nothing is sent to any chat — the result is only shown here."""
     message = message.strip()
     test_reply: str | None = None
     test_lead: str | None = None
+    test_tools: list[dict] = []
     test_error: str | None = None
 
-    if not claude_client.is_enabled():
+    if not ai_service.is_enabled():
         test_error = (
-            "ANTHROPIC_API_KEY sozlanmagan — sinov mumkin emas. Kalit "
-            "(Railway → Variables) qo'shilgach, bu oyna ishlaydi."
+            "AI sozlanmagan (ANTHROPIC_API_KEY yo'q yoki provayder noto'g'ri) — "
+            "sinov mumkin emas. Kalit (Railway → Variables) qo'shilgach, bu oyna ishlaydi."
         )
     elif message:
-        reply = claude_client.generate_reply([{"role": "user", "text": message}])
-        if reply is None:
-            test_error = (
-                "Claude javob bermadi (API xatosi — Railway loglaridagi "
-                "'Claude API' yozuvlarini tekshiring)."
-            )
+        outcome = ai_service.sandbox(message, login=user)
+        if outcome.get("error"):
+            test_error = outcome["error"]
         else:
-            visible, name, phone, course = claude_client.extract_lead(reply)
-            test_reply = visible or "(javob faqat lid belgisidan iborat bo'ldi)"
-            if phone:
-                test_lead = f"{name or '—'} | {phone} | {course or '—'}"
+            test_reply = outcome.get("text") or "(javob bo'sh qaytdi)"
+            test_tools = outcome.get("tool_trace") or []
+            lead = outcome.get("lead")
+            if lead and lead.get("phone"):
+                test_lead = (
+                    f"{lead.get('name') or '—'} | {lead.get('phone')} | "
+                    f"{lead.get('course') or '—'}"
+                )
     else:
         test_error = "Xabar matni bo'sh."
 
@@ -2031,6 +2043,7 @@ def test_ai(request: Request, message: str = Form(...), _: None = Depends(check_
             test_message=message,
             test_reply=test_reply,
             test_lead=test_lead,
+            test_tools=test_tools,
             test_error=test_error,
         ),
     )

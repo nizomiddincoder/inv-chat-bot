@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import Body, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import claude_client
+from . import ai_service
 from .admin.routes import router as admin_router
 from .config import settings
 from .database import init_db
@@ -39,15 +39,16 @@ async def lifespan(_: object):
     start_reminders_thread()  # group/trial/debt Telegram reminders, background thread
     from .backup import start_backup_thread
     start_backup_thread()     # daily 03:00 Tashkent DB backups, background thread
-    if claude_client.is_enabled():
+    if ai_service.is_enabled():
         logging.getLogger("startup").info(
-            "Claude mode ON: model=%s, knowledge files: %d",
+            "AI mode ON: provider=%s model=%s, knowledge files: %d",
+            settings.LLM_PROVIDER,
             settings.CLAUDE_MODEL,
-            claude_client.knowledge_file_count(),
+            ai_service.knowledge_file_count(),
         )
     else:
         logging.getLogger("startup").info(
-            "Claude mode OFF (ANTHROPIC_API_KEY not set) — "
+            "AI mode OFF (no LLM provider key) — "
             "business chats use the built-in button flow"
         )
     yield

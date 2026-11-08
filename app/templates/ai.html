@@ -1,42 +1,63 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>AI javoblar (Claude)</h1>
-<p class="page-sub">Claude'ning javob uslubi, qo'shimcha bilimlar va sinov oynasi.</p>
+<style>
+  .ai-log { font-size: 12.5px; }
+  .ai-log td { padding: 7px 8px; }
+  .tool-trace { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+  .tool-trace .t { font-size: 13px; margin-bottom: 4px; }
+  .tool-badge { display:inline-block; padding:1px 8px; border-radius:6px; font-size:12px; font-weight:600; }
+  .tool-badge.ok { background: var(--ok-bg); color: var(--ok-text); }
+  .tool-badge.err { background: var(--danger-bg); color: var(--danger-text); }
+</style>
 
-{% if not claude_enabled %}
+<h1>AI javoblar (JEY)</h1>
+<p class="page-sub">Tizim prompti, vositalar, qo'shimcha bilimlar va sinov oynasi.</p>
+
+{% if not ai_enabled %}
 <div class="flash" style="background:var(--warn-bg);border-color:var(--warn-text);color:var(--warn-text)">
-  <b>ANTHROPIC_API_KEY sozlanmagan</b> — hozir Claude o'chirilgan, bot eski tugmali oqim bilan ishlaydi.
-  Quyidagi sozlamalar kalit qo'shilgach kuchga kiradi.
+  <b>AI sozlanmagan</b> — hozir bot eski tugmali oqim bilan ishlaydi.
+  ANTHROPIC_API_KEY qo'shilgach (yoki boshqa provayder ulangach) quyidagi sozlamalar kuchga kiradi.
 </div>
 {% endif %}
 
 <div class="card">
-  <h2>1. Javob uslubi — professional ko'rsatmalar</h2>
+  <h2>1. Tizim prompti — JEYning ko'rsatmalari</h2>
   <p class="hint">
-    Claude mijozlarga aynan shu ko'rsatmalar bo'yicha javob beradi. Matnni o'zgartirib, javoblarni
-    yanada professional qilishingiz mumkin (ton, uzunlik, rasmiylik, taqiqlar).
-    To'liq o'chirsangiz — standart professional namuna qaytadi.
+    Model mijozlarga aynan shu ko'rsatmalar bo'yicha javob beradi (rol, til, ohang, taqiqlar,
+    operatorga yo'naltirish). To'liq o'chirsangiz — standart JEY namunasi qaytadi.
+    Narx va jadval baribir vositalardan (DB'dan) olinadi — bu qoidalarni tahrirlash bilan buzib bo'lmaydi.
   </p>
   <form method="post" action="/admin/ai">
-    <label>Stil ko'rsatmalari (prompt)</label>
-    <textarea name="style_prompt" rows="12">{{ style_prompt }}</textarea>
+    <label>Tizim prompti</label>
+    <textarea name="system_prompt" rows="14" style="min-height:260px;font-size:12.5px">{{ system_prompt }}</textarea>
 
     <label>Qo'shimcha bilimlar (ixtiyoriy)</label>
     <p class="hint">
-      knowledge/ papkasidagi fayllarga qo'shimcha matn: yangi narxlar, guruhlar, chegirmalar...
-      Bilimlar oxiriga qo'shiladi. (Panelda yozilgan matn qayta deploy qilinsa ham yo'qolmaydi.)
+      knowledge/ papkasidagi fayllarga qo'shimcha matn: manzil, eslatmalar, maxsus takliflar...
+      (Panelda yozilgan matn qayta deploy qilinsa ham yo'qolmaydi.)
     </p>
-    <textarea name="extra_knowledge" rows="5" placeholder="Masalan: Kompyuter savodxonlik — 1 oy, 500 000 so'm, yangi guruh 1-dekabrdan boshlanadi.">{{ extra_knowledge }}</textarea>
+    <textarea name="extra_knowledge" rows="5" placeholder="Masalan: Markaz manzili — Qo'qon, ...">{{ extra_knowledge }}</textarea>
 
     <div style="margin-top:8px"><button>Saqlash</button></div>
   </form>
 </div>
 
 <div class="card">
-  <h2>2. Sinov oynasi</h2>
+  <h2>2. Vositalar (tools)</h2>
   <p class="hint">
-    Mijoz xabarini yozib, Claude'ning <b>saqlangan</b> sozlamalar bo'yicha qanday javob berishini
-    ko'ring. Xabar hech kimga yuborilmaydi — javob faqat shu sahifada ko'rsatiladi.
+    Model ma'lumotni faqat shu vositalar orqali oladi. Har bir chaqiruv server tomonda tekshiriladi:
+    model foydalanuvchiga ruxsatsiz ma'lumot ko'ra olmaydi (masalan, boshqa talabaning balansini hech qachon).
+  </p>
+  <div class="actions">
+    {% for t in tools %}<span class="tool-badge ok">{{ t }}</span>{% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>3. Sinov oynasi</h2>
+  <p class="hint">
+    Mijoz xabarini yozib, modelning <b>saqlangan</b> sozlamalar bo'yicha qanday javob berishini va
+    qanday vositalar chaqirilishini ko'ring. Xabar hech kimga yuborilmaydi — natija faqat shu sahifada.
   </p>
   <form method="post" action="/admin/ai/test">
     <label>Mijoz xabari</label>
@@ -46,16 +67,53 @@
 
   {% if test_error %}<p style="color:#c0392b">{{ test_error }}</p>{% endif %}
   {% if test_reply is not none %}
-    <label>Claude javobi (mijoz ko'radigan ko'rinishda):</label>
+    <label>Javob (mijoz ko'radigan ko'rinishda):</label>
     <div class="card" style="background:var(--bg);margin-bottom:8px">
       <pre style="white-space:pre-wrap;font-family:inherit;margin:0;font-size:14px">{{ test_reply }}</pre>
     </div>
+    {% if test_tools %}
+      <div class="tool-trace">
+        {% for t in test_tools %}
+        <div class="t">
+          <span class="tool-badge {{ 'ok' if t.ok else 'err' }}">{{ t.name }}</span>
+          <span class="muted">{{ t.arguments | tojson }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    {% endif %}
     {% if test_lead %}<p class="muted">Lid aniqlandi: {{ test_lead }}</p>{% endif %}
   {% endif %}
 </div>
 
+<div class="card">
+  <h2>4. So'rovlar jurnali (oxirgi {{ ai_logs | length }} ta)</h2>
+  <p class="hint">Har bir AI so'rovi: model, tokenlar, vositalar, xatolar — sifatni solishtirish uchun.</p>
+  <div class="table-wrap">
+    <table class="ai-log">
+      <thead><tr><th>Vaqt</th><th>Model</th><th>Kanal</th><th>So'rov</th><th>Tokenlar</th><th>Vositalar</th><th>Xato</th><th>Ms</th></tr></thead>
+      <tbody>
+      {% for l in ai_logs %}
+        <tr>
+          <td class="nowrap">{{ l.created_at | tashkent }}</td>
+          <td>{{ l.model }}</td>
+          <td>{{ l.channel }}</td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ l.user_text }}">{{ l.user_text }}</td>
+          <td class="nowrap">{{ l.prompt_tokens or 0 }} / {{ l.completion_tokens or 0 }}</td>
+          <td>{% if l.tool_count %}{{ l.tool_count }} chaqiruv{% else %}—{% endif %}</td>
+          <td style="color:var(--red)">{{ l.error or "—" }}</td>
+          <td>{{ l.duration_ms or "—" }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted">Hozircha so'rov yo'q.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <p class="muted">
-  Model: <code>{{ model }}</code> &nbsp;|&nbsp; Bilim fayllari (<code>knowledge/</code>):
+  Provayder: <code>{{ provider }}</code> &nbsp;|&nbsp; Model: <code>{{ model }}</code> &nbsp;|&nbsp;
+  Bilim fayllari (<code>knowledge/</code>):
   {% if knowledge_files %}
     {% for f in knowledge_files %}<code>{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
   {% else %}topilmadi{% endif %}

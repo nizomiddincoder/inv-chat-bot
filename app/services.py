@@ -255,8 +255,9 @@ def clear_history(chat_id: int) -> None:
 # AI settings (admin panel -> AI Javoblar page)
 # ---------------------------------------------------------------------------
 
-AI_STYLE_KEY = "style_prompt"        # how Claude writes its answers
+AI_STYLE_KEY = "style_prompt"        # legacy style prompt (kept for old rows)
 AI_KNOWLEDGE_KEY = "extra_knowledge"  # extra facts appended to knowledge/ files
+AI_SYSTEM_KEY = "system_prompt"       # the JEY system prompt (admin-editable)
 
 
 def get_ai_text(key: str) -> str | None:

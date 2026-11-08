@@ -322,7 +322,7 @@ class ChatHistory(Base):
 class AiSetting(Base):
     """Editable AI settings (admin panel -> AI Javoblar page).
 
-    Long texts (Claude style prompt, extra knowledge) that don't fit the
+    Long texts (system prompt, extra knowledge) that don't fit the
     200-char Setting.value column.
     """
 
@@ -331,3 +331,28 @@ class AiSetting(Base):
     key: Mapped[str] = mapped_column(String(40), primary_key=True)
     text: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AiLog(Base):
+    """One row per AI request: model, tokens, tool calls, errors.
+
+    Used to compare answer quality across providers/models. Append-only,
+    old rows are pruned (keep last AI_LOG_KEEP).
+    """
+
+    __tablename__ = "ai_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    model: Mapped[str] = mapped_column(String(60))
+    channel: Mapped[str] = mapped_column(String(20), default="business")
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    user_text: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    reply_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_calls: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

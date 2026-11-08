@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func
 
-from . import claude_client
+from . import ai_service
 from . import telegram_client as tg
 from .database import SessionLocal
 from .models import BusinessConnectionRecord, Course, Lead, Teacher, utcnow
@@ -147,10 +147,10 @@ def _handle_business_message(message: dict) -> None:
         )
         return
 
-    # Claude answers business messages (knowledge from knowledge/ files).
-    # Without an API key the built-in button flow keeps working.
-    if claude_client.is_enabled():
-        _process_with_claude(chat["id"], user, text, connection_id)
+    # AI answers business messages (prompt + tools via ai_service).
+    # Without a provider the built-in button flow keeps working.
+    if ai_service.is_enabled():
+        _process_with_ai(chat["id"], user, text, connection_id)
     else:
         _process_flow(chat["id"], user, text, connection_id)
 
@@ -307,21 +307,19 @@ def _process_flow(chat_id: int, user: dict, text: str, business_connection_id: s
 
 
 # ---------------------------------------------------------------------------
-# Claude-powered answers (business messages)
+# AI-powered answers (business messages)
 # ---------------------------------------------------------------------------
 
-# How many recent messages of the chat are sent to Claude as context.
-CLAUDE_HISTORY_MESSAGES = 16
 
-
-def _process_with_claude(
+def _process_with_ai(
     chat_id: int, user: dict, text: str, business_connection_id: str | None
 ) -> None:
-    """Answer a business message with Claude (CLAUDE_MODEL, knowledge/ files).
+    """Answer a business message through ai_service (prompt + tools).
 
-    When the API call fails, the built-in flow takes over so the visitor
-    always gets a reply. A [LEAD]...[/LEAD] block in Claude's answer creates
-    a lead and notifies the owner (OWNER_NOTIFY_CHAT_ID).
+    When AI is unavailable (no provider / API error), the built-in flow takes
+    over so the visitor always gets a reply. A lead created by the
+    lid_yaratish tool — or the legacy [LEAD]...[/LEAD] marker — is announced
+    to the owner (OWNER_NOTIFY_CHAT_ID).
     """
     text = text.strip()
 
@@ -333,25 +331,49 @@ def _process_with_claude(
         return
 
     add_history(chat_id, "user", text)
-    reply = claude_client.generate_reply(
-        get_history(chat_id, CLAUDE_HISTORY_MESSAGES)
+    result = ai_service.chat_turn(
+        caller={
+            "channel": "business",
+            "telegram_user_id": user.get("id"),
+            "chat_id": chat_id,
+            "login": None,
+            "staff": False,
+        },
+        chat_id=chat_id,
+        user_text=text,
     )
-    if reply is None:
-        log.warning(
-            "Claude unavailable — answering chat %s with the built-in flow", chat_id
-        )
+    if result is None or not (result.get("text") or "").strip():
+        if result is None:
+            log.warning(
+                "AI unavailable — answering chat %s with the built-in flow", chat_id
+            )
         _process_flow(chat_id, user, text, business_connection_id)
         return
 
-    visible, lead_name, lead_phone, lead_course = claude_client.extract_lead(reply)
+    visible = result["text"]
     if not visible:
-        # Claude sent only the lead marker — show the standard finish text.
+        # The model produced only a lead (tool or marker) — show the finish text.
         visible = render("finish", first_name=user.get("first_name") or "do'st")
     add_history(chat_id, "assistant", visible)
     tg.send_message(chat_id, visible, business_connection_id=business_connection_id)
 
-    if lead_phone:
-        _save_claude_lead(user, lead_name, lead_phone, lead_course)
+    lead = result.get("lead")
+    if lead and lead.get("phone"):
+        if lead.get("id"):
+            # Already stored by the lid_yaratish tool — only announce it.
+            # Upserting again would wrongly bump repeat_count.
+            with SessionLocal() as session:
+                lead_row = session.get(Lead, lead["id"])
+            if lead_row is not None:
+                _notify_owner_new_lead(lead_row)
+        else:
+            # Legacy [LEAD] marker path: validate + upsert + notify here.
+            normalized = normalize_phone(lead.get("phone") or "")
+            if normalized:
+                _save_claude_lead(user, lead.get("name"), normalized, lead.get("course"))
+            else:
+                log.warning("AI lead has an invalid phone %r — not saved",
+                            lead.get("phone"))
 
 
 def _save_claude_lead(

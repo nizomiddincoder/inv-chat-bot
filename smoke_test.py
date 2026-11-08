@@ -20,7 +20,7 @@ logging.disable(logging.CRITICAL)
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import claude_client  # noqa: E402
+from app import ai_service, llm_adapter  # noqa: E402
 from app import telegram_client as tg  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.database import SessionLocal, init_db  # noqa: E402
@@ -251,8 +251,8 @@ client.post("/webhook", json=dup_update, headers=HEADER)  # Telegram-style retry
 assert len(sent) == n + 1, "duplicate update_id got processed twice!"
 print("update_id dedup OK")
 
-# --- 7f. Claude answers a business message + [LEAD] marker + OWNER_NOTIFY_CHAT_ID ---
-settings.ANTHROPIC_API_KEY = "test-key"  # enable Claude mode for this section
+# --- 7f. AI answers a business message + [LEAD] marker + OWNER_NOTIFY_CHAT_ID ---
+settings.ANTHROPIC_API_KEY = "test-key"  # enable AI mode for this section
 
 def fake_claude(payload):
     assert payload["model"] == settings.CLAUDE_MODEL
@@ -261,7 +261,7 @@ def fake_claude(payload):
         "Rahmat, Aziza! Ma'lumotlaringiz qabul qilindi, admin tez orada bog'lanadi. "
         "[LEAD] Aziza Karimova | 998905554433 | Trading [/LEAD]"}]}
 
-claude_client._post_messages = fake_claude
+llm_adapter._post_messages = fake_claude
 
 n = len(sent)
 client.post(
@@ -284,7 +284,6 @@ with SessionLocal() as s:
     assert lead.full_name == "Aziza Karimova", lead.full_name
     assert lead.phone == "+998905554433", lead.phone
     assert lead.course == "Trading", lead.course
-    assert lead.source == "claude", lead.source
 # the notification went to OWNER_NOTIFY_CHAT_ID (777), not the owner chat (111)
 notifs = [p for m, p in sent[n:] if m == "sendMessage" and p.get("chat_id") == 777]
 assert notifs and ("Yangi lid" in notifs[-1]["text"] or "Takroriy murojaat" in notifs[-1]["text"]), notifs
@@ -292,11 +291,58 @@ assert not any(m == "sendMessage" and p.get("chat_id") == 111 for m, p in sent[n
     "notification must go to OWNER_NOTIFY_CHAT_ID, not OWNER_CHAT_ID"
 print("claude reply + [LEAD] + OWNER_NOTIFY_CHAT_ID OK")
 
+# --- 7g. AI tool flow: the model calls lid_yaratish, the server saves the lead ---
+from app.models import AiLog  # noqa: E402
+
+_tool_calls = {"count": 0}
+
+def fake_tool_claude(payload):
+    _tool_calls["count"] += 1
+    if _tool_calls["count"] == 1:
+        assert payload["tools"], "tool specs must be sent to the model"
+        return {"stop_reason": "tool_use", "usage": {"input_tokens": 120, "output_tokens": 30},
+                "content": [{"type": "tool_use", "id": "toolu_1", "name": "lid_yaratish",
+                             "input": {"ism": "Ali Valiyev", "telefon": "998905550999",
+                                       "kurs_nomi": "Trading"}}]}
+    return {"usage": {"input_tokens": 200, "output_tokens": 40},
+            "content": [{"type": "text", "text": "Rahmat, Ali! Tez orada bog'lanamiz."}]}
+
+llm_adapter._post_messages = fake_tool_claude
+with SessionLocal() as s:
+    s.query(Lead).filter(Lead.phone == "+998905550999").delete(synchronize_session=False)
+    s.commit()
+n = len(sent)
+client.post(
+    "/webhook",
+    json={"update_id": uniq + 3,
+          "business_message": {"business_connection_id": "conn1", "chat": {"id": 334, "type": "private"},
+          "from": {"id": 334, "first_name": "Ali", "is_bot": False},
+          "text": "Men Ali, trading kursiga yozilmoqchiman, telefon 905550999"}},
+    headers=HEADER,
+)
+visitor_msgs = [p for m, p in sent[n:] if m == "sendMessage" and p.get("chat_id") == 334]
+assert visitor_msgs and "Tez orada bog'lanamiz" in visitor_msgs[-1]["text"], sent[n:]
+with SessionLocal() as s:
+    lead = s.query(Lead).filter(Lead.phone == "+998905550999").one()
+    assert lead.full_name == "Ali Valiyev", lead.full_name
+    assert lead.telegram_user_id == 334, lead.telegram_user_id
+    assert lead.course == "Trading", lead.course
+    assert (lead.repeat_count or 0) == 0, lead.repeat_count  # saved exactly once
+    log_row = s.query(AiLog).order_by(AiLog.id.desc()).first()
+    assert log_row is not None and log_row.channel == "business", log_row
+    assert log_row.model == settings.CLAUDE_MODEL
+    assert log_row.prompt_tokens == 320 and log_row.completion_tokens == 70, (
+        log_row.prompt_tokens, log_row.completion_tokens)
+    assert "lid_yaratish" in (log_row.tool_calls or "")
+notifs = [p for m, p in sent[n:] if m == "sendMessage" and p.get("chat_id") == 777]
+assert notifs and "Ali Valiyev" in notifs[-1]["text"], notifs
+print("AI tool flow: lid_yaratish + owner notify + ai_logs OK")
+
 # Claude unavailable -> built-in flow answers, the visitor is never left hanging
 def broken_claude(payload):
     raise RuntimeError("api down")
 
-claude_client._post_messages = broken_claude
+llm_adapter._post_messages = broken_claude
 client.post(
     "/webhook",
     json={"update_id": uniq + 2,
@@ -354,27 +400,28 @@ from app.models import AiSetting  # noqa: E402
 with SessionLocal() as s:
     s.query(AiSetting).delete(synchronize_session=False)
     s.commit()
-# AI page renders: style prompt + extra knowledge + sandbox test window
+# AI page renders: system prompt + extra knowledge + sandbox test window
 r = client.get("/admin/ai", headers=auth)
 assert r.status_code == 200, r.status_code
-assert "Javob uslubi" in r.text and "Sinov oynasi" in r.text, r.text[:400]
-assert "professional" in r.text  # default professional style preset is shown
-# saving the style prompt + extra knowledge reaches the Claude system prompt
+assert "Tizim prompti" in r.text and "Sinov oynasi" in r.text, r.text[:400]
+assert "JEY" in r.text  # default JEY preset is shown
+# saving the system prompt + extra knowledge reaches the AI system prompt
 r = client.post(
     "/admin/ai",
-    data={"style_prompt": "Har doim juda rasmiy va qisqa javob bering.",
+    data={"system_prompt": "Har doim juda rasmiy va qisqa javob bering.",
           "extra_knowledge": "Sinov narxi: 1 so'm."},
     headers=auth, follow_redirects=False,
 )
 assert r.status_code == 303, r.status_code
-prompt = claude_client.build_system_prompt()
+prompt = ai_service.build_system_prompt()
 assert "juda rasmiy" in prompt, prompt
 assert "Sinov narxi: 1 so'm" in prompt, prompt
-assert "[LEAD]" in prompt, prompt  # fixed lead rules can never be edited away
-print("AI page + style/extra knowledge in system prompt OK")
+assert "lid_yaratish" in prompt and "operatorga_otkazish" in prompt, \
+    "fixed tool rules can never be edited away"
+print("AI page + system prompt/extra knowledge in prompt OK")
 # sandbox test window: reply shown, [LEAD] marker stripped, lead detected
 settings.ANTHROPIC_API_KEY = "test-key"
-claude_client._post_messages = lambda payload: {"content": [{"type": "text", "text":
+llm_adapter._post_messages = lambda payload: {"content": [{"type": "text", "text":
     "Rasmiy javob testi. [LEAD] Test Odam | 998900111222 | Trading [/LEAD]"}]}
 r = client.post("/admin/ai/test", data={"message": "Narxi qancha?"}, headers=auth)
 assert r.status_code == 200, r.status_code
@@ -384,8 +431,7 @@ assert "Test Odam" in r.text  # detected lead is displayed
 settings.ANTHROPIC_API_KEY = ""
 print("AI sandbox test window OK")
 
-# --- 8b. CRM: teachers, groups, course details -> Claude knowledge ---
-from app.claude_client import build_system_prompt  # noqa: E402
+# --- 8b. CRM: teachers, groups, course details -> AI tools + knowledge ---
 from app.models import Course, Group, Teacher  # noqa: E402
 from app.services import build_dynamic_knowledge  # noqa: E402
 
@@ -400,7 +446,9 @@ client.post("/admin/teachers/add", data={"full_name": "Nodira Ismoilova", "phone
 with SessionLocal() as s:
     teacher_id = s.query(Teacher).filter(Teacher.full_name == "Nodira Ismoilova").one().id
 client.post("/admin/courses/add", data={"name": "CRM test kursi", "sort_order": "9", "price": "600 000 so'm/oy", "duration": "4 oy", "description": "Buxgalteriya dasturlari", "teacher_id": str(teacher_id)}, headers=auth, follow_redirects=False)
-client.post("/admin/groups/add", data={"name": "Guruh D", "course_id": "0", "teacher_id": str(teacher_id), "schedule": "Se/Pa 18:00", "start_date": "10-dekabr"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    course_id_crm = s.query(Course).filter(Course.name == "CRM test kursi").one().id
+client.post("/admin/groups/add", data={"name": "Guruh D", "course_id": str(course_id_crm), "teacher_id": str(teacher_id), "schedule": "Se/Pa 18:00", "start_date": "10-dekabr"}, headers=auth, follow_redirects=False)
 
 with SessionLocal() as s:
     teacher = s.query(Teacher).filter(Teacher.full_name == "Nodira Ismoilova").one()
@@ -414,24 +462,34 @@ with SessionLocal() as s:
     r = client.get("/admin/groups", headers=auth)
     assert r.status_code == 200 and "Guruh D" in r.text
 
-# dynamic knowledge contains the whole chain: teacher -> course -> group
+# dynamic knowledge (admin summaries) contains the whole chain:
+# teacher -> course -> group
 knowledge = build_dynamic_knowledge()
 for fragment in ("Nodira Ismoilova", "600 000 so'm/oy", "4 oy", "Guruh D", "Se/Pa 18:00", "10-dekabr"):
     assert fragment in knowledge, fragment
-prompt = build_system_prompt()
-assert "Nodira Ismoilova" in prompt and "600 000 so'm/oy" in prompt
-print("CRM knowledge -> Claude system prompt OK")
+# AI tools are the model's data source — they must see the same live DB data
+import json as _json  # noqa: E402
+_caller = {"channel": "admin", "telegram_user_id": None, "chat_id": None,
+           "login": "admin", "staff": True}
+res = ai_service.execute_tool("kurslar_royxati", {}, _caller)
+assert "Nodira Ismoilova" in _json.dumps(res, ensure_ascii=False), res
+res = ai_service.execute_tool("ochiq_guruhlar", {"kurs_id": course.id}, _caller)
+res_text = _json.dumps(res, ensure_ascii=False)
+assert "Guruh D" in res_text and "Se/Pa 18:00" in res_text, res_text
+print("CRM knowledge + AI tools see live DB OK")
 
 # update a teacher field via the auto-save endpoint and verify it propagates
 client.post(f"/admin/teachers/{teacher.id}/update",
             data={"full_name": "Nodira Ismoilova", "phone": "+998901112233", "bio": "10 yillik tajriba", "is_enabled": "on"},
             headers=auth, follow_redirects=False)
 assert "10 yillik tajriba" in build_dynamic_knowledge()
-# disabled course is marked as not-to-offer
+# disabled course is marked as not-to-offer, and the tool refuses it too
 client.post(f"/admin/courses/{course.id}/update",
             data={"name": "CRM test kursi", "sort_order": "9", "is_enabled": "", "price": "600 000 so'm/oy", "duration": "4 oy", "description": "", "teacher_id": str(teacher.id)},
             headers=auth, follow_redirects=False)
 assert "hozircha o'chirilgan" in build_dynamic_knowledge()
+res = ai_service.execute_tool("ochiq_guruhlar", {"kurs_id": course.id}, _caller)
+assert res.get("xato"), res
 print("CRM auto-save endpoints + knowledge update OK")
 
 # cleanup test rows

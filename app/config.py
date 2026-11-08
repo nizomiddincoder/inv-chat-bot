@@ -69,6 +69,9 @@ class Settings:
             os.getenv("ANTHROPIC_API_KEY", "").strip()
             or os.getenv("CLAUDE_API_KEY", "").strip()
         )
+        # Which LLM adapter answers (see app/llm_adapter.py). "claude" today,
+        # your own model later — prompts/tools/business logic never change.
+        self.LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "claude").strip().lower()
         # Model id, e.g. "claude-sonnet-4-5" (docs.claude.com -> models).
         self.CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5").strip()
         try:
