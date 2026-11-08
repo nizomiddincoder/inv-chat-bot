@@ -18,9 +18,10 @@
       ID ni bilish uchun botga <a href="https://t.me/userinfobot">@userinfobot</a> dan biror xabar yozing.
     </p>
 
-    <label style="display:inline-flex;align-items:center;gap:8px;margin-top:14px;">
+    <label class="chk" style="margin-top:14px;white-space:normal;align-items:flex-start;" title="Eslatmalarni yoqish/o'chirish">
       <input type="checkbox" name="reminders_enabled" {{ 'checked' if reminders_enabled else '' }}>
-      Telegram eslatmalar yoqilgan (guruh boshlanishi, sinov darsi, qarzdorlar)
+      <span class="box"><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.2 4.8 9 10 3.2"/></svg></span>
+      <span class="txt">Telegram eslatmalar yoqilgan (guruh boshlanishi, sinov darsi, qarzdorlar)</span>
     </label>
     <p class="hint">
       Eslatmalar faqat ish vaqti ichida yuboriladi ({{ work_start }}–{{ work_end }}).

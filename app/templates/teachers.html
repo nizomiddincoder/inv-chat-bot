@@ -70,8 +70,10 @@
     <textarea data-f="bio" data-orig="{{ teacher.bio or '' }}">{{ teacher.bio or '' }}</textarea>
   </div>
   <div class="row-actions">
-    <label class="nowrap" style="display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13px;font-weight:500;">
-      <input type="checkbox" data-f="is_enabled" {% if teacher.is_enabled %}checked{% endif %}> Faol
+    <label class="chk" title="Faol o'qituvchi">
+      <input type="checkbox" data-f="is_enabled" {% if teacher.is_enabled %}checked{% endif %}>
+      <span class="box"><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.2 4.8 9 10 3.2"/></svg></span>
+      <span class="txt">Faol</span>
     </label>
     <button type="button" class="danger small t-del">O'chirish</button>
   </div>

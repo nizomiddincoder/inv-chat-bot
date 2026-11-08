@@ -238,6 +238,39 @@
     }
     textarea { width: 100%; min-height: 90px; resize: vertical; padding: 9px 11px; height: auto; }
 
+    /* number inputs: no spinner "buttons" flickering on hover */
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
+    /* ============ Checkbox component (.chk): whole label is the click target,
+       the box itself is drawn as an icon (favicon-style square + checkmark) ============ */
+    .chk {
+      position: relative;
+      display: inline-flex; align-items: center; gap: 7px;
+      cursor: pointer; user-select: none; -webkit-user-select: none;
+      font-size: 13px; font-weight: 500; color: var(--muted);
+      margin: 0; white-space: nowrap;
+    }
+    .chk input {
+      position: absolute; width: 1px; height: 1px;
+      opacity: 0; margin: 0; pointer-events: none;
+    }
+    .chk .box {
+      flex: 0 0 auto; width: 18px; height: 18px;
+      border-radius: 5px; border: 1.5px solid var(--border);
+      background: var(--surface);
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: background .12s, border-color .12s;
+    }
+    .chk .box svg { width: 11px; height: 11px; opacity: 0; transform: scale(.5); transition: opacity .12s, transform .12s; }
+    .chk:hover .box { border-color: var(--primary-2); }
+    .chk input:checked + .box { background: var(--primary); border-color: var(--primary); }
+    .chk input:checked + .box svg { opacity: 1; transform: scale(1); }
+    .chk input:checked ~ .txt { color: var(--text); }
+    .chk input:focus-visible + .box { outline: 2px solid var(--primary-2); outline-offset: 2px; }
+    .chk.on { color: var(--text); }
+
     /* ============ Buttons: one system on every page ============ */
     button, .btn {
       background: var(--primary); color: #fff; border: none;

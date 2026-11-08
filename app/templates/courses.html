@@ -8,17 +8,24 @@
   .add-form button { align-self: flex-end; }
   .field-error { color: var(--red); font-size: 12.5px; margin-top: 5px; }
 
-  /* course card grid */
-  .c-card { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(110px, .8fr) minmax(100px, .7fr) minmax(150px, 1fr) minmax(90px, .6fr) auto; gap: 12px; align-items: start; }
-  .c-card .fld { display: flex; flex-direction: column; gap: 4px; }
+  /* course card: header row (name + toggle + delete), field row, description */
+  .c-card { padding: 16px 18px; }
+  .c-card .c-head { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+  .c-card .c-head .fld { flex: 1 1 200px; min-width: 0; }
+  .c-card .c-head .chk { margin-bottom: 9px; }
+  .c-card .c-head button { margin-bottom: 0; }
+  .c-card .c-grid {
+    display: grid;
+    grid-template-columns: minmax(120px, 1.1fr) minmax(100px, .9fr) minmax(90px, .7fr) minmax(140px, 1.2fr) minmax(70px, .5fr);
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .c-card .fld { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .c-card .fld label { margin: 0; font-size: 12px; color: var(--faint); }
-  .c-card .row-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
   .c-card.off { opacity: .55; }
-  .c-desc { grid-column: 1 / -1; }
-  .c-desc textarea { min-height: 46px; }
+  .c-card .c-desc textarea { min-height: 46px; }
   @media (max-width: 900px) {
-    .c-card { grid-template-columns: 1fr 1fr; }
-    .c-card .row-actions { justify-content: flex-start; }
+    .c-card .c-grid { grid-template-columns: 1fr 1fr; }
   }
 
   .modal-backdrop {
@@ -81,40 +88,44 @@
 {% for course in courses %}
 {% set c_teacher = (teachers | selectattr('id', 'equalto', course.teacher_id) | list | first) if course.teacher_id else none %}
 <div class="card c-card {{ 'off' if not course.is_enabled else '' }}" data-id="{{ course.id }}">
-  <div class="fld">
-    <label>Kurs nomi</label>
-    <input type="text" data-f="name" value="{{ course.name }}" data-orig="{{ course.name }}">
-  </div>
-  <div class="fld">
-    <label>Narx (matn)</label>
-    <input type="text" data-f="price" value="{{ course.price or '' }}" data-orig="{{ course.price or '' }}" placeholder="500 000 so'm/oy">
-  </div>
-  <div class="fld">
-    <label>Oylik narx (so'm)</label>
-    <input type="number" data-f="price_sum" value="{{ course.price_sum or 0 }}" data-orig="{{ course.price_sum or 0 }}" title="To'lov va qarz hisobi uchun">
-  </div>
-  <div class="fld">
-    <label>Muddat</label>
-    <input type="text" data-f="duration" value="{{ course.duration or '' }}" data-orig="{{ course.duration or '' }}" placeholder="3 oy">
-  </div>
-  <div class="fld">
-    <label>O'qituvchi</label>
-    <select data-f="teacher_id" data-orig="{{ course.teacher_id or 0 }}">
-      <option value="0">— tanlanmagan —</option>
-      {% for t in teachers %}
-      <option value="{{ t.id }}" {{ 'selected' if course.teacher_id == t.id else '' }}>{{ t.full_name }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="fld">
-    <label>Tartib</label>
-    <input type="number" data-f="sort_order" value="{{ course.sort_order }}" data-orig="{{ course.sort_order }}">
-  </div>
-  <div class="row-actions">
-    <label class="nowrap" style="display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13px;font-weight:500;">
-      <input type="checkbox" data-f="is_enabled" {% if course.is_enabled %}checked{% endif %}> Yoqilgan
+  <div class="c-head">
+    <div class="fld">
+      <label>Kurs nomi</label>
+      <input type="text" data-f="name" value="{{ course.name }}" data-orig="{{ course.name }}">
+    </div>
+    <label class="chk" title="Yoqilgan kurs botdagi tugmalarda ko'rinadi">
+      <input type="checkbox" data-f="is_enabled" {% if course.is_enabled %}checked{% endif %}>
+      <span class="box"><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6.2 4.8 9 10 3.2"/></svg></span>
+      <span class="txt">Yoqilgan</span>
     </label>
     <button type="button" class="danger small c-del">O'chirish</button>
+  </div>
+  <div class="c-grid">
+    <div class="fld">
+      <label>Narx (matn)</label>
+      <input type="text" data-f="price" value="{{ course.price or '' }}" data-orig="{{ course.price or '' }}" placeholder="500 000 so'm/oy">
+    </div>
+    <div class="fld">
+      <label>Oylik narx (so'm)</label>
+      <input type="number" data-f="price_sum" value="{{ course.price_sum or 0 }}" data-orig="{{ course.price_sum or 0 }}" title="To'lov va qarz hisobi uchun">
+    </div>
+    <div class="fld">
+      <label>Muddat</label>
+      <input type="text" data-f="duration" value="{{ course.duration or '' }}" data-orig="{{ course.duration or '' }}" placeholder="3 oy">
+    </div>
+    <div class="fld">
+      <label>O'qituvchi</label>
+      <select data-f="teacher_id" data-orig="{{ course.teacher_id or 0 }}">
+        <option value="0">— tanlanmagan —</option>
+        {% for t in teachers %}
+        <option value="{{ t.id }}" {{ 'selected' if course.teacher_id == t.id else '' }}>{{ t.full_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="fld">
+      <label>Tartib</label>
+      <input type="number" data-f="sort_order" value="{{ course.sort_order }}" data-orig="{{ course.sort_order }}">
+    </div>
   </div>
   <div class="fld c-desc">
     <label>Tavsif (bot mijozga shu bo'yicha javob beradi)</label>
@@ -170,7 +181,10 @@
            - (parseInt(b.querySelector("[data-f='sort_order']").value, 10) || 0);
     });
     var anchor = document.querySelector("#del-modal");
-    cards.forEach(function (c) { document.body.insertBefore(c, anchor); });
+    // the modal and the cards share the same parent (<main>) — insert into THAT parent,
+    // body.insertBefore() would throw NotFoundError and fake a "network error" toast
+    var parent = anchor ? anchor.parentNode : document.body;
+    cards.forEach(function (c) { parent.insertBefore(c, anchor); });
   }
 
   document.querySelectorAll(".c-card").forEach(function (card) {
