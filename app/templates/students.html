@@ -93,6 +93,7 @@
   </form>
 </div>
 
+{% if staging %}
 <div class="card" style="padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
   <span class="hint" style="margin:0">Test belgili lid va talabalar:</span>
   <button type="button" class="danger small" id="purge-test">Test ma'lumotlarni o'chirish</button>
@@ -108,6 +109,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <form method="get" action="/admin/students" class="filters" id="filters">
   <input type="text" name="q" value="{{ f_q }}" placeholder="Ism yoki telefon" aria-label="Qidirish">
@@ -496,6 +498,7 @@
     });
   });
 
+  {% if staging %}
   var purgeModal = document.getElementById("purge-modal");
   document.getElementById("purge-test").addEventListener("click", function () {
     purgeModal.hidden = false;
@@ -515,6 +518,7 @@
       setTimeout(function () { location.reload(); }, 900);
     }).catch(function () { showToast("Tarmoq xatosi"); });
   });
+  {% endif %}
 })();
 </script>
 

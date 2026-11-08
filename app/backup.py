@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import telegram_client as tg
-from .database import SessionLocal
+from .database import SessionLocal, engine
 from .models import utcnow
 from .services import TZ, get_owner_notify_chat_id, log_audit
 
@@ -24,6 +24,16 @@ log = logging.getLogger("bot.backup")
 
 BACKUP_DIR = Path(__file__).resolve().parent.parent / "backups"
 KEEP_BACKUPS = 14
+
+# Every table in the dump, in a stable order (same for create and restore).
+BACKUP_TABLES = (
+    ("courses", "Course"), ("groups", "Group"), ("teachers", "Teacher"),
+    ("employees", "Employee"), ("leads", "Lead"), ("students", "Student"),
+    ("payments", "Payment"), ("lead_notes", "LeadNote"),
+    ("student_notes", "StudentNote"), ("settings", "Setting"),
+    ("bot_messages", "BotMessage"), ("ai_settings", "AiSetting"),
+    ("message_templates", "MessageTemplate"), ("audit_log", "AuditLog"),
+)
 
 
 def _serialize_value(value):
@@ -43,14 +53,7 @@ def create_backup(actor: str = "system") -> tuple[str | None, str | None]:
         dump: dict = {"created_at": utcnow().isoformat(), "tables": {}}
         table_models = {
             table: getattr(models, model_name)
-            for table, model_name in (
-                ("courses", "Course"), ("groups", "Group"), ("teachers", "Teacher"),
-                ("employees", "Employee"), ("leads", "Lead"), ("students", "Student"),
-                ("payments", "Payment"), ("lead_notes", "LeadNote"),
-                ("student_notes", "StudentNote"), ("settings", "Setting"),
-                ("bot_messages", "BotMessage"), ("ai_settings", "AiSetting"),
-                ("message_templates", "MessageTemplate"), ("audit_log", "AuditLog"),
-            )
+            for table, model_name in BACKUP_TABLES
         }
         with SessionLocal() as session:
             for table, model in table_models.items():
@@ -101,6 +104,86 @@ def list_backups() -> list[dict]:
             }
         )
     return result
+
+
+def _coerce_column(column, value):
+    """Convert a JSON string back to the column's Python type."""
+    if value is None:
+        return None
+    pytype = column.type.python_type
+    try:
+        if pytype is datetime:
+            return datetime.fromisoformat(value)
+        if pytype is date:
+            return date.fromisoformat(value)
+        if pytype is bool:
+            return bool(value)
+        if pytype is int:
+            return int(value)
+        if pytype is float:
+            return float(value)
+    except (ValueError, TypeError):
+        return None
+    return str(value)
+
+
+def restore_backup(filename: str, actor: str = "admin") -> tuple[bool, str | None]:
+    """Replace the rows of every backed-up table with a JSON dump's contents.
+
+    A safety backup is taken first, and the whole restore runs in ONE
+    transaction — any failure rolls everything back, so the database is never
+    left half-restored. Returns (ok, error).
+    """
+    from . import models
+    from sqlalchemy import text
+
+    safe = Path(filename).name  # no path traversal
+    path = BACKUP_DIR / safe
+    if not safe.startswith("backup-") or not path.is_file():
+        return False, "Zaxira fayli topilmadi"
+    try:
+        dump = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"Fayl o'qilmadi: {exc}"
+    tables = dump.get("tables") if isinstance(dump, dict) else None
+    if not isinstance(tables, dict):
+        return False, "Fayl tuzilishi noto'g'ri"
+
+    safety_name, err = create_backup(f"{actor} (restore oldidan)")
+    if err:
+        return False, f"Tiklashdan oldin xavfsizlik zaxirasi olinmadi: {err}"
+
+    try:
+        with SessionLocal() as session:
+            for table, model_name in BACKUP_TABLES:
+                model = getattr(models, model_name)
+                columns = {c.name: c for c in model.__table__.columns}
+                session.query(model).delete(synchronize_session=False)
+                for row in tables.get(table, []):
+                    values = {
+                        col: _coerce_column(columns[col], row[col])
+                        for col in columns if col in row
+                    }
+                    session.add(model(**values))
+            # PostgreSQL SERIAL sequences lag behind restored explicit ids —
+            # push each one past MAX(id) so the next insert cannot collide.
+            if engine.dialect.name == "postgresql":
+                for table, _ in BACKUP_TABLES:
+                    session.execute(text(
+                        f"DO $$ DECLARE seq text; BEGIN "
+                        f"seq := pg_get_serial_sequence('{table}', 'id'); "
+                        f"IF seq IS NOT NULL THEN "
+                        f"PERFORM setval(seq, COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, false); "
+                        f"END IF; END $$;"
+                    ))
+            session.commit()
+    except Exception as exc:  # noqa: BLE001 — restore must never crash the app
+        log.exception("Restore failed")
+        return False, f"{type(exc).__name__}: {exc}"
+    log_audit(actor, "backup", 0, "tiklandi", None, None,
+              f"{safe} (xavfsizlik nusxa: {safety_name})")
+    log.info("Backup restored: %s (safety: %s)", safe, safety_name)
+    return True, None
 
 
 def _notify_backup_failure(error: str) -> None:

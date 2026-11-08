@@ -312,6 +312,7 @@ def leads_page(
             "employees": get_employees(enabled_only=True),
             "enroll_groups": _enroll_groups(),
             "message_templates": get_templates(),
+            "staging": _is_staging(),
             "today": datetime.now(TZ).date(),
             "f_course": course,
             "f_status": status,
@@ -1291,6 +1292,17 @@ def download_backup(name: str, _: str = Depends(check_auth)):
     )
 
 
+@router.post("/backups/restore")
+def restore_backup_route(name: str = Form(...), user: str = Depends(check_auth)):
+    """Restore the database from a backup file (safety backup taken first)."""
+    from ..backup import restore_backup
+
+    ok, error = restore_backup(name, actor=user)
+    if not ok:
+        return JSONResponse({"ok": False, "error": f"Tiklanmadi: {error}"}, status_code=500)
+    return JSONResponse({"ok": True})
+
+
 # ---------------------------------------------------------------------------
 # Error journal (Boshqaruv > Xatolar) — 500s with secrets scrubbed
 # ---------------------------------------------------------------------------
@@ -1357,7 +1369,13 @@ def purge_test_data(user: str = Depends(check_auth)):
     """Delete every test-marked lead and student (with their notes/payments).
 
     Real data is never touched: only rows with is_test = True are removed.
+    Staging-only: the button is hidden and the route refused in production.
     """
+    if not _is_staging():
+        raise HTTPException(
+            status_code=403,
+            detail="Test ma'lumotlarni o'chirish faqat staging muhitida ishlaydi",
+        )
     from ..models import LeadNote
     from ..services import refresh_group_status
 
@@ -1529,6 +1547,12 @@ def send_student_message(
 # Audit log (Boshqaruv > Jurnal) — admin only, append-only
 # ---------------------------------------------------------------------------
 
+def _is_staging() -> bool:
+    """True when STAGING=1 env is set — test-data purge is staging-only."""
+    import os
+    return os.environ.get("STAGING", "") == "1"
+
+
 def _is_admin_login(login: str) -> bool:
     if login == settings.ADMIN_USER:
         return True
@@ -1619,6 +1643,7 @@ def students_page(
             "student_statuses": STUDENT_STATUSES,
             "payment_methods": PAYMENT_METHODS,
             "message_templates": get_templates(),
+            "staging": _is_staging(),
             "f_q": q,
             "f_group": group_id,
             "f_status": status,

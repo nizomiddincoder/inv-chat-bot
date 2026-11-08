@@ -79,11 +79,14 @@ def _migrate_schema() -> None:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
     additions = {
+        # NOTE: one entry per table — a duplicate dict key silently replaces
+        # the earlier columns list (that is how courses lost its first block).
         "courses": {
             "description": "TEXT",
             "price": "VARCHAR(60)",
             "duration": "VARCHAR(60)",
             "teacher_id": "INTEGER",
+            "price_sum": "INTEGER",
         },
         "leads": {
             "assigned_to": "INTEGER",
@@ -92,21 +95,16 @@ def _migrate_schema() -> None:
             "repeat_count": "INTEGER",
             "trial_date": "DATE",
             "group_id": "INTEGER",
+            "is_test": "BOOLEAN",
         },
         "groups": {
             "capacity": "INTEGER",
             "status": "VARCHAR(20)",
             "starts_on": "DATE",
         },
-        "courses": {
-            "price_sum": "INTEGER",
-        },
         "students": {
             "discount_type": "VARCHAR(10)",
             "discount_value": "INTEGER",
-            "is_test": "BOOLEAN",
-        },
-        "leads": {
             "is_test": "BOOLEAN",
         },
     }

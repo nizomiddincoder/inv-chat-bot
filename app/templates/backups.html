@@ -5,6 +5,20 @@
   .bk-row:first-of-type { border-top: none; }
   .bk-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bk-meta { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(30, 34, 53, .45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--surface); border-radius: var(--r-lg);
+    box-shadow: var(--sh-md); padding: 22px 24px;
+    max-width: 460px; width: 100%;
+  }
+  .modal p { margin: 8px 0 18px; color: var(--muted); }
+  .modal .actions { justify-content: flex-end; }
 </style>
 
 <h1>Zaxira nusxa</h1>
@@ -23,10 +37,79 @@
   <div class="bk-row">
     <span class="bk-name">{{ b.name }}</span>
     <span class="bk-meta">{{ b.created }} · {{ b.size_kb }} KB</span>
-    <span style="margin-left:auto"><a class="btn outline small" href="/admin/backups/download?name={{ b.name }}">Yuklab olish</a></span>
+    <span style="margin-left:auto;display:inline-flex;gap:8px;">
+      <a class="btn outline small" href="/admin/backups/download?name={{ b.name }}">Yuklab olish</a>
+      <button type="button" class="outline small bk-restore" data-name="{{ b.name }}">Tiklash</button>
+    </span>
   </div>
   {% else %}
   <div class="muted">Hozircha zaxira yo'q — tugma bilan oling.</div>
   {% endfor %}
 </div>
+
+<div class="modal-backdrop" id="restore-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Bazani tiklash</h2>
+    <p>
+      Joriy ma'lumotlar <b id="rm-name"></b> nusxasi bilan <b>to'liq almashtiriladi</b>.
+      Tiklashdan oldin xavfsizlik nusxasi avtomatik olinadi. Davom etilsinmi?
+    </p>
+    <div class="actions">
+      <button type="button" class="outline" id="rm-cancel">Bekor qilish</button>
+      <button type="button" id="rm-confirm">Tiklash</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var createBtn = document.getElementById("bk-create");
+  createBtn.addEventListener("click", function () {
+    createBtn.disabled = true;
+    showToast("Zaxira olinmoqda...");
+    fetch("/admin/backups/create", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { showToast(d.error || "Zaxira olinmadi"); return; }
+        showToast("Zaxira olindi");
+        location.reload();
+      })
+      .catch(function () { showToast("Tarmoq xatosi"); })
+      .finally(function () { createBtn.disabled = false; });
+  });
+
+  var modal = document.getElementById("restore-modal");
+  var pendingName = null;
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".bk-restore");
+    if (!btn) return;
+    pendingName = btn.dataset.name;
+    document.getElementById("rm-name").textContent = pendingName;
+    modal.hidden = false;
+  });
+  function closeModal() { modal.hidden = true; pendingName = null; }
+  document.getElementById("rm-cancel").addEventListener("click", closeModal);
+  modal.addEventListener("click", function (e) { if (e.target === modal) closeModal(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
+  document.getElementById("rm-confirm").addEventListener("click", function () {
+    if (!pendingName) return;
+    var confirmBtn = this;
+    confirmBtn.disabled = true;
+    showToast("Tiklanmoqda...");
+    fetch("/admin/backups/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ name: pendingName }).toString()
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { showToast(d.error || "Tiklanmadi"); return; }
+        showToast("Baza tiklandi");
+        setTimeout(function () { location.reload(); }, 800);
+      })
+      .catch(function () { showToast("Tarmoq xatosi"); })
+      .finally(function () { confirmBtn.disabled = false; closeModal(); });
+  });
+})();
+</script>
 {% endblock %}

@@ -47,6 +47,7 @@
 <h1>Lidlar</h1>
 <p class="page-sub">Holat, izoh, mas'ul va qo'ng'iroq sanasi avtomatik saqlanadi.</p>
 
+{% if staging %}
 <div class="card" style="padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
   <span class="hint" style="margin:0">Test belgili lid va talabalar (masalan, sinov paytida kiritilganlar):</span>
   <button type="button" class="danger small" id="purge-test">Test ma'lumotlarni o'chirish</button>
@@ -62,6 +63,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <div class="card">
   <h2>Yangi lid (qo'lda kiritish)</h2>
@@ -504,6 +506,7 @@
     });
   });
 
+  {% if staging %}
   var purgeModal = document.getElementById("purge-modal");
   document.getElementById("purge-test").addEventListener("click", function () {
     purgeModal.hidden = false;
@@ -518,6 +521,7 @@
       setTimeout(function () { location.reload(); }, 900);
     }).catch(function () { showToast("Tarmoq xatosi"); });
   });
+  {% endif %}
 
   // --- add lead form: validate name + phone ---
   var addForm = document.getElementById("add-form");

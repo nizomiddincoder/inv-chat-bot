@@ -965,6 +965,53 @@ r = client.get("/admin/backups", headers=auth)
 assert r.status_code == 200 and "Zaxira olish" in r.text
 print("backup create/download/retention OK")
 
+# 1b. staging guard: test-data purge is refused without STAGING=1
+import os as _os  # noqa: E402
+_os.environ.pop("STAGING", None)
+r = client.post("/admin/test-data/purge", data={}, headers=auth)
+assert r.status_code == 403, r.status_code
+r = client.get("/admin/leads", headers=auth)
+assert "purge-test" not in r.text  # button hidden in production mode
+print("purge staging guard OK")
+
+# 1c. restore: corrupt data -> restore from the backup above -> data back
+from app.models import Course  # noqa: E402
+
+with SessionLocal() as s:
+    n_courses_before = s.query(Course).count()
+    n_leads_before = s.query(Lead).count()
+    real_name = s.query(Course).order_by(Course.id).first().name
+    real_lead_id = s.query(Lead).order_by(Lead.id).first().id
+# corrupt: rename + junk row + wipe leads entirely
+with SessionLocal() as s:
+    c = s.get(Course, s.query(Course).order_by(Course.id).first().id)
+    c.name = "BUZILGAN NOM"
+    s.add(Course(name="RESTORE_JUNK_QOSHILDI"))
+    s.query(Lead).delete(synchronize_session=False)
+    s.commit()
+ok, err = backup_mod.restore_backup(filename, actor="admin")
+assert ok, err
+with SessionLocal() as s:
+    assert s.query(Course).count() == n_courses_before
+    assert s.query(Lead).count() == n_leads_before
+    assert s.query(Course).filter(Course.name == "RESTORE_JUNK_QOSHILDI").first() is None
+    assert s.query(Course).filter(Course.name == real_name).first() is not None
+    assert s.get(Lead, real_lead_id) is not None  # leads came back with the same ids
+# path traversal / garbage filenames are refused
+assert backup_mod.restore_backup("../orphan.json", actor="admin")[0] is False
+assert backup_mod.restore_backup("does-not-exist.json", actor="admin")[0] is False
+# audit written (the restore itself rewinds audit_log to the snapshot —
+# the safety-backup note lives in the "tiklandi" row's new_value)
+with SessionLocal() as s:
+    last = s.query(AuditLog).filter(AuditLog.entity == "backup").order_by(AuditLog.id.desc()).first()
+    assert last.action == "tiklandi" and "xavfsizlik nusxa" in (last.new_value or "")
+# restore route works as well
+r = client.post("/admin/backups/restore", data={"name": filename}, headers=auth)
+assert r.status_code == 200 and r.json()["ok"] is True, r.text
+r = client.get("/admin/backups", headers=auth)
+assert "Tiklash" in r.text  # restore button rendered
+print("backup restore OK")
+
 # 2. error journal: force a 500 -> sanitized entry in error_log
 client2e = TestClient(app, raise_server_exceptions=False)
 client2e.post("/admin/login", data={"login": "admin", "password": "test-pass"})
@@ -1004,7 +1051,8 @@ r = client.get("/admin/kanban", headers=auth)
 assert 'rel="manifest"' in r.text
 print("PWA manifest/icon/sw OK")
 
-# 5. test data: mark, badge, purge (real rows untouched)
+# 5. test data: mark, badge, purge (real rows untouched) — staging mode only
+_os.environ["STAGING"] = "1"  # the purge button/route exist only in staging
 client.post("/admin/leads/add", data={"full_name": "Haqiqiy Mijoz", "phone": "938880011", "source": "instagram"}, headers=auth, follow_redirects=False)
 client.post("/admin/leads/add", data={"full_name": "Test Mijoz", "phone": "938880022", "source": "instagram"}, headers=auth, follow_redirects=False)
 with SessionLocal() as s:
@@ -1033,6 +1081,7 @@ with SessionLocal() as s:
     assert s.get(Student, st_t_id) is None
     assert s.get(Lead, real_id) is not None
 print("test data marker + purge OK")
+_os.environ.pop("STAGING", None)  # back to production mode for the rest
 
 # cleanup stage-5 rows
 with SessionLocal() as s:
