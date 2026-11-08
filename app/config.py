@@ -2,6 +2,19 @@
 import os
 
 
+def normalize_db_url(url: str) -> str:
+    """Convert Railway's DATABASE_URL to SQLAlchemy + psycopg 3 format.
+
+    Railway gives "postgres://..." or "postgresql://..."; the engine must be
+    told which driver to use, so both become "postgresql+psycopg://...".
+    """
+    if url.startswith("postgres://"):
+        url = "postgresql+psycopg://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
 class Settings:
     """All settings come from environment variables (set in Railway).
 
@@ -24,12 +37,11 @@ class Settings:
         self.ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "").strip()
 
         # PostgreSQL connection string from Railway.
-        # Railway may give "postgres://..." — SQLAlchemy needs "postgresql://..."
-        db_url = os.getenv("DATABASE_URL", "").strip()
-        if db_url.startswith("postgres://"):
-            db_url = db_url.replace("postgres://", "postgresql://", 1)
-        # Local fallback so the owner can test on their own computer.
-        self.DATABASE_URL: str = db_url or "sqlite:///./inventor_local.db"
+        # Railway may give "postgres://..." or "postgresql://..."; SQLAlchemy needs
+        # an explicit driver, so we normalize to "postgresql+psycopg://" (psycopg 3).
+        self.DATABASE_URL: str = normalize_db_url(
+            os.getenv("DATABASE_URL", "").strip()
+        ) or "sqlite:///./inventor_local.db"
 
         # Working hours (Asia/Tashkent). Can be changed later in the admin panel.
         self.WORK_START: str = os.getenv("WORK_START", "09:00").strip()

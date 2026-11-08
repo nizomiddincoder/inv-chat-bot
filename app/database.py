@@ -66,6 +66,20 @@ def init_db() -> None:
     """Create all tables (if missing) and seed defaults. Runs on startup."""
     from . import models  # noqa: F401  (models must be imported to be registered)
 
-    Base.metadata.create_all(engine)
+    log.info(
+        "Using DB driver: %s (dialect: %s)",
+        engine.dialect.driver,
+        engine.dialect.name,
+    )
+    try:
+        Base.metadata.create_all(engine)
+    except Exception:
+        # Log the full error so the owner can see the exact problem in Railway logs.
+        log.exception(
+            "FAILED to create database tables. Check DATABASE_URL and that the "
+            "PostgreSQL plugin is added in Railway. The app will keep running, "
+            "but the bot cannot work without the database."
+        )
+        raise
     _seed_defaults()
     log.info("Database ready: %s", engine.url.render_as_string(hide_password=True))
