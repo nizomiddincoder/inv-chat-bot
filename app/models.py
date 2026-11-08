@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -59,13 +59,28 @@ class Group(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Employee(Base):
+    """A staff member. Roles prepare per-role visibility for later stages."""
+
+    __tablename__ = "employees"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(120))
+    login: Mapped[str] = mapped_column(String(60), unique=True)
+    # admin | operator | teacher | accountant (only "admin" is active now)
+    role: Mapped[str] = mapped_column(String(20), default="operator")
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Lead(Base):
     """A person who asked about a course."""
 
     __tablename__ = "leads"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    # Telegram user id — unique, used to avoid duplicate leads.
+    # Telegram user id — unique, used to avoid duplicate leads. 0 for leads
+    # added manually from the admin panel.
     telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -74,14 +89,35 @@ class Lead(Base):
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     # new | contacted | enrolled | rejected
     status: Mapped[str] = mapped_column(String(20), default="new", index=True)
+    # Where the lead came from: telegram_bot | instagram | meta | tavsiya | yurish | boshqa
     source: Mapped[str | None] = mapped_column(String(40), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Employee responsible for this lead (employees.id).
+    assigned_to: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Next planned call date; overdue ones are highlighted red.
+    follow_up_at: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    # Filled when the lead is rejected: narx | boshqa_markaz | javob_yoq | vaqt_yoq | boshqa
+    reject_reason: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    # How many times this person applied again (phone dedup marker).
+    repeat_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     # Set after the bot sends the one-time 24h follow-up to the owner.
     followup_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class LeadNote(Base):
+    """One entry in a lead's comment history (date, time and author kept)."""
+
+    __tablename__ = "lead_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lead_id: Mapped[int] = mapped_column(Integer, index=True)
+    text: Mapped[str] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class BotMessage(Base):

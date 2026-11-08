@@ -2,14 +2,95 @@
 {% block content %}
 <style>
   .st-inline { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
-  .st-inline select { max-width: 148px; }
-  .note-input { width: 112px; }
-  .tbl-card { padding: 6px 6px 2px; }
-  td.date { font-size: 13px; }
+  .st-inline select { max-width: 150px; }
+  .st-inline .reason { max-width: 150px; }
+  .assign-select, .source-label { font-size: 13px; }
+  .assign-select { max-width: 140px; }
+  .fu-input { width: 118px; font-size: 13px; }
+  .fu-input.overdue { border-color: var(--red); color: var(--red); font-weight: 600; }
+  .note-input { width: 120px; }
+  .note-open { font-size: 12px; color: var(--primary); background: none; border: none; padding: 0; height: auto; cursor: pointer; font-weight: 600; }
+  .note-open:hover { background: none; text-decoration: underline; }
+  .last-note { display: block; max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 13px; }
+  .repeat-badge {
+    display: inline-block; margin-left: 6px; font-size: 10.5px; font-weight: 600;
+    background: #FEF3E2; color: #B45309; border-radius: 999px; padding: 1px 7px;
+  }
+  .add-panel { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+  .add-panel .fld { display: flex; flex-direction: column; gap: 4px; }
+  .add-panel .fld label { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .add-panel button { align-self: flex-end; }
+  .field-error { color: var(--red); font-size: 12.5px; margin-top: 5px; }
+
+  /* notes history modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(30, 34, 53, .45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--surface); border-radius: var(--r-lg);
+    box-shadow: var(--sh-md); padding: 22px 24px;
+    max-width: 480px; width: 100%; max-height: 80vh; overflow-y: auto;
+  }
+  .modal h2 { margin-bottom: 12px; }
+  .note-item { border-bottom: 1px solid var(--border); padding: 9px 2px; }
+  .note-item:last-child { border-bottom: none; }
+  .note-item .meta { color: var(--faint); font-size: 12px; margin-top: 3px; }
+  .modal .actions { justify-content: flex-end; margin-top: 14px; }
 </style>
 
 <h1>Lidlar</h1>
-<p class="page-sub">Holat va izohlar avtomatik saqlanadi — tugma bosish shart emas.</p>
+<p class="page-sub">Holat, izoh, mas'ul va qo'ng'iroq sanasi avtomatik saqlanadi.</p>
+
+<div class="card">
+  <h2>Yangi lid (qo'lda kiritish)</h2>
+  <form method="post" action="/admin/leads/add" class="add-panel" id="add-form" novalidate>
+    <div class="fld">
+      <label for="na-name">Ism familiya</label>
+      <input type="text" name="full_name" id="na-name" placeholder="Masalan: Oybek Sultonov">
+    </div>
+    <div class="fld">
+      <label for="na-phone">Telefon</label>
+      <input type="text" name="phone" id="na-phone" placeholder="901234567">
+    </div>
+    <div class="fld">
+      <label for="na-course">Kurs</label>
+      <select name="course" id="na-course">
+        <option value="">— tanlanmagan —</option>
+        {% for name in course_names %}
+        <option value="{{ name }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="fld">
+      <label for="na-source">Manba</label>
+      <select name="source" id="na-source">
+        {% for value, label in sources.items() if value != 'telegram_bot' %}
+        <option value="{{ value }}" {{ 'selected' if value == 'boshqa' else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="fld">
+      <label for="na-assign">Mas'ul</label>
+      <select name="assigned_to" id="na-assign">
+        <option value="0">— tanlanmagan —</option>
+        {% for e in employees %}
+        <option value="{{ e.id }}">{{ e.full_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="fld">
+      <label for="na-follow">Keyingi qo'ng'iroq</label>
+      <input type="date" name="follow_up_at" id="na-follow">
+    </div>
+    <button type="submit">Qo'shish</button>
+  </form>
+  <div class="field-error" id="add-error" hidden>Ism va to'g'ri telefon raqamini kiriting.</div>
+  <p class="hint">Telefon bazada bor bo'lsa, yangi yozuv o'rniga mavjud lid "takroriy murojaat" bilan yangilanadi.</p>
+</div>
 
 <form method="get" action="/admin/leads" class="filters" id="filters">
   <select name="course" aria-label="Kurs bo'yicha filtr">
@@ -30,38 +111,72 @@
 
 <div class="table-wrap tbl-card">
 <table>
-  <tr>
-    <th>ID</th><th>Ism</th><th>Telefon</th><th>Kurs</th><th>Username</th>
-    <th>Holat</th><th>Izoh</th><th>Yaratildi</th><th>Yangilandi</th>
-  </tr>
+  <thead>
+    <tr>
+      <th>ID</th><th>Ism</th><th>Telefon</th><th>Kurs</th><th>Manba</th>
+      <th>Mas'ul</th><th>Holat</th><th>Keyingi qo'ng'iroq</th><th>Izoh</th>
+    </tr>
+  </thead>
+  <tbody>
   {% for lead in leads %}
-  <tr>
-    <td>{{ lead.id }}</td>
-    <td>{{ lead.full_name or '—' }}</td>
-    <td class="nowrap"><a href="tel:{{ lead.phone }}">{{ lead.phone or '—' }}</a></td>
-    <td>{{ lead.course or '—' }}</td>
-    <td>{% if lead.username %}@{{ lead.username }}{% else %}—{% endif %}</td>
-    <td class="nowrap">
-      <span class="st-inline">
-        <span class="st-dot st-{{ lead.status }}" data-dot="{{ lead.id }}"></span>
-        <select data-status-lead="{{ lead.id }}" aria-label="Lid holati">
-          {% for value, label in status_labels.items() %}
-            <option value="{{ value }}" {{ 'selected' if value == lead.status else '' }}>{{ label }}</option>
+  {% set overdue = lead.follow_up_at and lead.follow_up_at < today %}
+    <tr>
+      <td>{{ lead.id }}</td>
+      <td>{{ lead.full_name or '—' }}{% if (lead.repeat_count or 0) > 0 %}<span class="repeat-badge">takroriy</span>{% endif %}</td>
+      <td class="nowrap"><a href="tel:{{ lead.phone }}">{{ lead.phone or '—' }}</a></td>
+      <td>{{ lead.course or '—' }}</td>
+      <td class="source-label">{{ source_label(lead.source) }}</td>
+      <td>
+        <select class="assign-select" data-assign-lead="{{ lead.id }}" aria-label="Mas'ul xodim">
+          <option value="0">—</option>
+          {% for e in employees %}
+          <option value="{{ e.id }}" {{ 'selected' if lead.assigned_to == e.id else '' }}>{{ e.full_name }}</option>
           {% endfor %}
         </select>
-      </span>
-    </td>
-    <td>
-      <input type="text" class="note-input" value="{{ lead.notes or '' }}" placeholder="Izoh"
-             data-note-lead="{{ lead.id }}" data-orig="{{ lead.notes or '' }}" aria-label="Izoh">
-    </td>
-    <td class="nowrap date">{{ lead.created_at | tashkent }}</td>
-    <td class="nowrap date">{{ lead.updated_at | tashkent }}</td>
-  </tr>
+      </td>
+      <td class="nowrap">
+        <span class="st-inline">
+          <span class="st-dot st-{{ lead.status }}" data-dot="{{ lead.id }}"></span>
+          <select data-status-lead="{{ lead.id }}" aria-label="Lid holati">
+            {% for value, label in status_labels.items() %}
+              <option value="{{ value }}" {{ 'selected' if value == lead.status else '' }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          {% if lead.status == 'rejected' %}
+          <select class="reason" data-reason-lead="{{ lead.id }}" data-orig="{{ lead.reject_reason or '' }}" title="Rad etish sababi">
+            {% for value, label in reject_reasons.items() %}
+              <option value="{{ value }}" {{ 'selected' if lead.reject_reason == value else '' }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          {% endif %}
+        </span>
+      </td>
+      <td>
+        <input type="date" class="fu-input {{ 'overdue' if overdue else '' }}" value="{{ lead.follow_up_at.isoformat() if lead.follow_up_at else '' }}"
+               data-follow-lead="{{ lead.id }}" title="Keyingi qo'ng'iroq sanasi">
+      </td>
+      <td>
+        <span class="last-note">{% if last_notes.get(lead.id) %}{{ last_notes[lead.id].text }}{% else %}—{% endif %}</span>
+        <button type="button" class="note-open" data-notes-lead="{{ lead.id }}">Tarix</button>
+        <input type="text" class="note-input" placeholder="Izoh qo'shish" data-note-lead="{{ lead.id }}" aria-label="Yangi izoh">
+      </td>
+    </tr>
   {% else %}
-  <tr><td colspan="9" class="muted">Hozircha lid yo'q.</td></tr>
+    <tr><td colspan="9" class="muted">Hozircha lid yo'q.</td></tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
+
+<!-- comment history modal -->
+<div class="modal-backdrop" id="notes-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="notes-title">
+    <h2 id="notes-title">Izohlar tarixi</h2>
+    <div id="notes-list"></div>
+    <div class="actions">
+      <button type="button" class="outline" id="notes-close">Yopish</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -83,42 +198,164 @@
     });
   }
 
-  // --- status: save immediately on change (dot + dropdown on one row) ---
+  function post(url, params) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params).toString()
+    });
+  }
+
+  // --- status: save immediately; "Rad etildi" requires a reason ---
   document.querySelectorAll("select[data-status-lead]").forEach(function (sel) {
     sel.addEventListener("change", function () {
       var id = sel.dataset.statusLead;
-      var body = new URLSearchParams({ status: sel.value });
-      fetch("/admin/leads/" + id + "/status", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: body.toString()
-      }).then(function (r) {
-        if (!r.ok) { showToast("❌ Saqlanmadi"); return; }
-        var dot = document.querySelector("[data-dot='" + id + "']");
-        if (dot) dot.className = "st-dot st-" + sel.value;
-        showToast("Saqlandi ✅");
-      }).catch(function () { showToast("❌ Tarmoq xatosi"); });
+      var status = sel.value;
+      var row = sel.closest("tr");
+      var reason = "";
+      if (status === "rejected") {
+        // show the reason dropdown next to the status
+        if (!row.querySelector("[data-reason-lead='" + id + "']")) {
+          var rsel = document.createElement("select");
+          rsel.className = "reason";
+          rsel.dataset.reasonLead = id;
+          var reasons = {{ reject_reasons | tojson }};
+          for (var key in reasons) {
+            var opt = document.createElement("option");
+            opt.value = key; opt.textContent = reasons[key];
+            rsel.appendChild(opt);
+          }
+          sel.parentElement.appendChild(rsel);
+          bindReason(rsel);
+        }
+        reason = row.querySelector("[data-reason-lead='" + id + "']").value;
+        if (!reason) { showToast("Rad etish sababini tanlang"); return; }
+      }
+      post("/admin/leads/" + id + "/status", { status: status, reason: reason })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.ok) { showToast(data.error || "Saqlanmadi"); return; }
+          var dot = document.querySelector("[data-dot='" + id + "']");
+          if (dot) dot.className = "st-dot st-" + status;
+          if (status !== "rejected") {
+            var rs = row.querySelector("[data-reason-lead='" + id + "']");
+            if (rs) rs.remove();
+          }
+          showToast("Saqlandi");
+        })
+        .catch(function () { showToast("Tarmoq xatosi"); });
     });
   });
 
-  // --- notes: save on Enter or on blur (only when changed) ---
+  // --- reject reason change: save it too ---
+  function bindReason(rsel) {
+    rsel.addEventListener("change", function () {
+      var id = rsel.dataset.reasonLead;
+      post("/admin/leads/" + id + "/status", { status: "rejected", reason: rsel.value })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          showToast(data.ok ? "Sabab saqlandi" : (data.error || "Saqlanmadi"));
+        })
+        .catch(function () { showToast("Tarmoq xatosi"); });
+    });
+  }
+  document.querySelectorAll("select[data-reason-lead]").forEach(bindReason);
+
+  // --- assignee: save on change ---
+  document.querySelectorAll("select[data-assign-lead]").forEach(function (sel) {
+    sel.addEventListener("change", function () {
+      post("/admin/leads/" + sel.dataset.assignLead + "/assign", { assigned_to: sel.value })
+        .then(function (r) { return r.json(); })
+        .then(function (data) { showToast(data.ok ? "Mas'ul saqlandi" : (data.error || "Saqlanmadi")); })
+        .catch(function () { showToast("Tarmoq xatosi"); });
+    });
+  });
+
+  // --- follow-up date: save on change; overdue rows turn red ---
+  document.querySelectorAll("input[data-follow-lead]").forEach(function (input) {
+    input.addEventListener("change", function () {
+      post("/admin/leads/" + input.dataset.followLead + "/followup", { follow_up_at: input.value })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.ok) { showToast(data.error || "Saqlanmadi"); return; }
+          var overdue = input.value && input.value < "{{ today.isoformat() }}";
+          input.classList.toggle("overdue", overdue);
+          showToast("Saqlandi");
+        })
+        .catch(function () { showToast("Tarmoq xatosi"); });
+    });
+  });
+
+  // --- notes: quick input adds to history on Enter or blur ---
   document.querySelectorAll("input[data-note-lead]").forEach(function (input) {
     input.addEventListener("keydown", function (e) {
       if (e.key === "Enter") { e.preventDefault(); input.blur(); }
     });
     input.addEventListener("blur", function () {
-      if (input.dataset.orig === input.value) return;
-      var body = new URLSearchParams({ notes: input.value });
-      fetch("/admin/leads/" + input.dataset.noteLead + "/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: body.toString()
-      }).then(function (r) {
-        if (!r.ok) { showToast("❌ Saqlanmadi"); return; }
-        input.dataset.orig = input.value;
-        showToast("Saqlandi ✅");
-      }).catch(function () { showToast("❌ Tarmoq xatosi"); });
+      var text = input.value.trim();
+      if (!text) return;
+      post("/admin/leads/" + input.dataset.noteLead + "/notes", { text: text })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.ok) { showToast(data.error || "Saqlanmadi"); return; }
+          input.value = "";
+          showToast("Izoh qo'shildi");
+        })
+        .catch(function () { showToast("Tarmoq xatosi"); });
     });
+  });
+
+  // --- history modal ---
+  var modal = document.getElementById("notes-modal");
+  var list = document.getElementById("notes-list");
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-notes-lead]");
+    if (!btn) return;
+    var id = btn.dataset.notesLead;
+    list.textContent = "Yuklanmoqda...";
+    modal.hidden = false;
+    fetch("/admin/leads/" + id + "/notes")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        list.textContent = "";
+        if (!data.ok || !data.notes.length) {
+          list.textContent = "Hozircha izoh yo'q.";
+          return;
+        }
+        data.notes.forEach(function (n) {
+          var item = document.createElement("div");
+          item.className = "note-item";
+          var body = document.createElement("div");
+          body.textContent = n.text;
+          var meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = n.created + " · " + n.author;
+          item.appendChild(body);
+          item.appendChild(meta);
+          list.appendChild(item);
+        });
+      })
+      .catch(function () { list.textContent = "Tarmoq xatosi"; });
+  });
+  document.getElementById("notes-close").addEventListener("click", function () { modal.hidden = true; });
+  modal.addEventListener("click", function (e) { if (e.target === modal) modal.hidden = true; });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") modal.hidden = true; });
+
+  // --- add lead form: validate name + phone ---
+  var addForm = document.getElementById("add-form");
+  var nameInput = document.getElementById("na-name");
+  var phoneInput = document.getElementById("na-phone");
+  var addError = document.getElementById("add-error");
+  [nameInput, phoneInput].forEach(function (el) {
+    el.addEventListener("input", function () { addError.hidden = true; });
+  });
+  addForm.addEventListener("submit", function (e) {
+    var digits = phoneInput.value.replace(/\D/g, "");
+    if (!nameInput.value.trim() || digits.length < 9) {
+      e.preventDefault();
+      addError.hidden = false;
+      (nameInput.value.trim() ? phoneInput : nameInput).focus();
+    }
   });
 })();
 </script>

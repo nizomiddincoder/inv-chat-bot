@@ -134,7 +134,7 @@
   var timers = {};
   function saveCard(card) {
     var name = card.querySelector("[data-f='name']").value.trim();
-    if (!name) { showToast("❌ Kurs nomi bo'sh bo'lishi mumkin emas"); return; }
+    if (!name) { showToast("Kurs nomi bo'sh bo'lishi mumkin emas"); return; }
     var body = new URLSearchParams();
     card.querySelectorAll("[data-f]").forEach(function (el) {
       var f = el.dataset.f;
@@ -146,12 +146,12 @@
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString()
     }).then(function (r) {
-      if (!r.ok) { showToast("❌ Saqlanmadi"); return; }
+      if (!r.ok) { showToast("Saqlanmadi"); return; }
       card.querySelectorAll("[data-orig]").forEach(function (el) { el.dataset.orig = el.value; });
       card.classList.toggle("off", !card.querySelector("[data-f='is_enabled']").checked);
-      showToast("Saqlandi ✅");
+      showToast("Saqlandi");
       sortCards();
-    }).catch(function () { showToast("❌ Tarmoq xatosi"); });
+    }).catch(function () { showToast("Tarmoq xatosi"); });
   }
 
   function sortCards() {
@@ -195,12 +195,12 @@
     var card = pendingCard;
     fetch("/admin/courses/" + card.dataset.id + "/delete", { method: "POST" })
       .then(function (r) {
-        if (!r.ok) { showToast("❌ O'chirilmadi"); closeModal(); return; }
+        if (!r.ok) { showToast("O'chirilmadi"); closeModal(); return; }
         card.remove();
         closeModal();
-        showToast("Kurs o'chirildi ✅");
+        showToast("Kurs o'chirildi");
       })
-      .catch(function () { showToast("❌ Tarmoq xatosi"); closeModal(); });
+      .catch(function () { showToast("Tarmoq xatosi"); closeModal(); });
   });
 
   // --- add course: empty name -> inline error, no submit ---

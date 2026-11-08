@@ -145,11 +145,11 @@
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString()
     }).then(function (r) {
-      if (!r.ok) { showToast("❌ Saqlanmadi"); return; }
+      if (!r.ok) { showToast("Saqlanmadi"); return; }
       card.querySelectorAll("[data-orig]").forEach(function (el) { el.dataset.orig = el.value; });
       card.classList.toggle("off", !card.querySelector("[data-f='is_enabled']").checked);
-      showToast("Saqlandi ✅");
-    }).catch(function () { showToast("❌ Tarmoq xatosi"); });
+      showToast("Saqlandi");
+    }).catch(function () { showToast("Tarmoq xatosi"); });
   }
 
   document.querySelectorAll(".g-card").forEach(function (card) {
@@ -181,12 +181,12 @@
     var card = pendingCard;
     fetch("/admin/groups/" + card.dataset.id + "/delete", { method: "POST" })
       .then(function (r) {
-        if (!r.ok) { showToast("❌ O'chirilmadi"); closeModal(); return; }
+        if (!r.ok) { showToast("O'chirilmadi"); closeModal(); return; }
         card.remove();
         closeModal();
-        showToast("Guruh o'chirildi ✅");
+        showToast("Guruh o'chirildi");
       })
-      .catch(function () { showToast("❌ Tarmoq xatosi"); closeModal(); });
+      .catch(function () { showToast("Tarmoq xatosi"); closeModal(); });
   });
 
   // --- add form: require a name ---

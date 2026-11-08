@@ -41,6 +41,12 @@
     font-size: 11.5px; font-weight: 600;
     display: inline-flex; align-items: center; justify-content: center;
   }
+  .kcard .badge {
+    display: inline-block; font-size: 10.5px; background: var(--tint);
+    border-radius: 999px; padding: 1px 7px; color: var(--primary-deep); font-weight: 600;
+  }
+  .kcard .badge.warn { background: #FEF3E2; color: #B45309; }
+  .kcard .badge.mut { background: #F1F3F9; color: var(--muted); font-weight: 500; }
   .kcard .meta { color: var(--muted); font-size: 12.5px; margin-top: 5px; overflow-wrap: anywhere; }
   /* phone + date: one row, wraps to a second row when it does not fit */
   .kcard .meta-row {
@@ -49,10 +55,8 @@
   }
   .kcard .meta-row .phone { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
   .kcard .meta-row .time { color: var(--faint); font-size: 11.5px; white-space: nowrap; }
-  .kcard .badge {
-    display: inline-block; font-size: 11px; background: var(--tint);
-    border-radius: 999px; padding: 1px 7px; color: var(--primary-deep); font-weight: 500;
-  }
+  .kcard .fu { font-size: 12px; margin-top: 4px; }
+  .kcard .fu.overdue { color: var(--red); font-weight: 600; }
   /* equal-size stat cards, one row (wraps on very narrow screens) */
   .stats {
     display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr));
@@ -64,10 +68,27 @@
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
   }
   .stat b { font-size: 17px; color: var(--text); font-weight: 700; }
+
+  /* reject reason modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(30, 34, 53, .45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--surface); border-radius: var(--r-lg);
+    box-shadow: var(--sh-md); padding: 22px 24px;
+    max-width: 400px; width: 100%;
+  }
+  .modal p { margin: 8px 0 14px; color: var(--muted); }
+  .modal select { width: 100%; }
+  .modal .actions { justify-content: flex-end; margin-top: 16px; }
 </style>
 
 <h1>Kanban doskasi</h1>
-<p class="page-sub">Kartani ustundan ustunga sudrab, lid bosqichini o'zgartiring.</p>
+<p class="page-sub">Kartani ustundan ustunga sudrab, lid bosqichini o'zgartiring. "Rad etildi" ustuniga sudrashda sabab so'raladi.</p>
 
 <div class="stats">
   <span class="stat">Jami lidlar<b>{{ total_count }}</b></span>
@@ -81,13 +102,21 @@
     <div class="col-body" data-drop="{{ col.status }}">
       {% for c in cards if c.status == col.status %}
       <div class="kcard" draggable="true" data-id="{{ c.id }}" data-status="{{ c.status }}">
-        <div class="name"><span class="avatar">{{ c.full_name[:2] | upper }}</span>{{ c.full_name }}</div>
+        <div class="name"><span class="avatar">{{ c.full_name[:2] | upper }}</span>{{ c.full_name }}{% if c.repeat %}<span class="badge warn">takroriy</span>{% endif %}</div>
         <div class="meta-row">
-          <span class="phone">📞 {{ c.phone }}</span>
+          <span class="phone">{{ c.phone }}</span>
           <span class="time">{{ c.updated }}</span>
         </div>
-        <div class="meta">📚 {{ c.course }}{% if c.username %} &nbsp;<span class="badge">@{{ c.username }}</span>{% endif %}</div>
-        {% if c.notes %}<div class="meta">📝 {{ c.notes[:60] }}</div>{% endif %}
+        <div class="meta">{{ c.course }}{% if c.username %} <span class="badge">@{{ c.username }}</span>{% endif %}</div>
+        <div class="meta">
+          {% if c.assignee %}<span class="badge mut">{{ c.assignee }}</span>{% endif %}
+          <span class="badge mut">{{ c.source }}</span>
+        </div>
+        {% if c.follow_up_at %}
+        <div class="fu {{ 'overdue' if c.follow_up_overdue else '' }}">Keyingi qo'ng'iroq: {{ c.follow_up_at }}{% if c.follow_up_overdue %} (muddati o'tgan){% endif %}</div>
+        {% endif %}
+        {% if c.reject_reason %}<div class="meta">Sabab: {{ c.reject_reason }}</div>{% endif %}
+        {% if c.notes %}<div class="meta">Izoh: {{ c.notes[:60] }}</div>{% endif %}
       </div>
       {% endfor %}
     </div>
@@ -95,10 +124,31 @@
   {% endfor %}
 </div>
 
+<!-- reject reason modal (opens when a card is dropped into "Rad etildi") -->
+<div class="modal-backdrop" id="reject-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Rad etish sababi</h2>
+    <p>Lidni "Rad etildi" bosqichiga ko'chirish uchun sababni tanlang.</p>
+    <select id="reject-reason">
+      {% for value, label in reject_reasons.items() %}
+      <option value="{{ value }}">{{ label }}</option>
+      {% endfor %}
+    </select>
+    <div class="actions">
+      <button type="button" class="outline" id="reject-cancel">Bekor qilish</button>
+      <button type="button" class="danger" id="reject-confirm">Rad etish</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   var board = document.getElementById("board");
   var dragCard = null;
+  var pendingMove = null;
+
+  var rejectModal = document.getElementById("reject-modal");
+  var reasonSelect = document.getElementById("reject-reason");
 
   function recount() {
     document.querySelectorAll(".col").forEach(function (col) {
@@ -107,9 +157,10 @@
     });
   }
 
-  function moveCard(card, status) {
+  function moveCard(card, status, reason) {
     if (card.dataset.status === status) return;
     var body = new URLSearchParams({ status: status });
+    if (reason) body.set("reason", reason);
     fetch("/admin/leads/" + card.dataset.id + "/move", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -117,14 +168,14 @@
     })
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (!data.ok) { showToast("❌ Saqlanmadi: " + (data.error || "xato")); return; }
+        if (!data.ok) { showToast(data.error || "Saqlanmadi"); return; }
         card.dataset.status = status;
         var target = document.querySelector('[data-drop="' + status + '"]');
         target.prepend(card);
         recount();
-        showToast("Lid yangi bosqichga ko'chirildi ✅");
+        showToast("Lid yangi bosqichga ko'chirildi");
       })
-      .catch(function () { showToast("❌ Tarmoq xatosi"); });
+      .catch(function () { showToast("Tarmoq xatosi"); });
   }
 
   board.addEventListener("dragstart", function (e) {
@@ -155,7 +206,26 @@
     if (!body || !dragCard) return;
     e.preventDefault();
     body.classList.remove("dragover");
-    moveCard(dragCard, body.dataset.drop);
+    var status = body.dataset.drop;
+    if (status === "rejected" && dragCard.dataset.status !== "rejected") {
+      pendingMove = dragCard;
+      rejectModal.hidden = false;
+      return;
+    }
+    moveCard(dragCard, status);
+  });
+
+  document.getElementById("reject-cancel").addEventListener("click", function () {
+    rejectModal.hidden = true; pendingMove = null;
+  });
+  rejectModal.addEventListener("click", function (e) { if (e.target === rejectModal) { rejectModal.hidden = true; pendingMove = null; } });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { rejectModal.hidden = true; pendingMove = null; } });
+  document.getElementById("reject-confirm").addEventListener("click", function () {
+    if (!pendingMove) return;
+    var card = pendingMove;
+    var reason = reasonSelect.value;
+    rejectModal.hidden = true; pendingMove = null;
+    moveCard(card, "rejected", reason);
   });
 
   recount();

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kirish — Markaz admin</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%235B6CF0'/%3E%3Ctext x='16' y='21.5' font-family='Arial,sans-serif' font-size='15' font-weight='700' fill='white' text-anchor='middle'%3EM%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #5B6CF0; --primary-deep: #4350C9; --primary-2: #7C89F5;
+      --bg: #F4F5FD; --surface: #FFFFFF; --text: #1E2235; --muted: #6B7180;
+      --border: #E6E8F4; --tint: #EEF0FD; --red: #EF4444;
+      --r-md: 12px; --r-lg: 16px;
+      --sh-md: 0 4px 16px rgba(91,108,240,.10), 0 2px 6px rgba(30,34,53,.05);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: var(--bg); color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Arial, sans-serif; font-size: 14px;
+    }
+    .box {
+      background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-md);
+      padding: 32px 30px; width: 100%; max-width: 360px;
+    }
+    .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+    .logo-mark {
+      width: 40px; height: 40px; border-radius: 50%; background: var(--primary); color: #fff;
+      font-weight: 700; font-size: 17px; display: flex; align-items: center; justify-content: center;
+    }
+    h1 { font-size: 19px; font-weight: 700; margin: 0; }
+    .sub { color: var(--muted); font-size: 13px; margin: 4px 0 18px; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; font-size: 13.5px; }
+    input {
+      width: 100%; font-family: inherit; font-size: 14px; color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+      padding: 0 12px; height: 40px;
+    }
+    input:focus { outline: 2px solid var(--primary-2); border-color: var(--primary); }
+    button {
+      width: 100%; margin-top: 20px; height: 40px;
+      background: var(--primary); color: #fff; border: none; border-radius: 8px;
+      font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    button:hover { background: var(--primary-deep); }
+    .error {
+      background: #FDEBEC; border: 1px solid #F5C6C8; color: #B91C1C;
+      border-radius: var(--r-md); padding: 9px 12px; font-size: 13px; margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+  <form class="box" method="post" action="/admin/login">
+    <div class="logo">
+      <div class="logo-mark">M</div>
+      <div><h1>Markaz CRM</h1></div>
+    </div>
+    <div class="sub">Admin panelga kirish uchun login va parol kiriting.</div>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <label for="login">Login</label>
+    <input type="text" id="login" name="login" required autocomplete="username" autofocus>
+    <label for="password">Parol</label>
+    <input type="password" id="password" name="password" required autocomplete="current-password">
+    <button type="submit">Kirish</button>
+  </form>
+</body>
+</html>

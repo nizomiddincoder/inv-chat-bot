@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .add-form { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+  .add-form .fld { display: flex; flex-direction: column; gap: 4px; }
+  .add-form .fld label { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .add-form button { align-self: flex-end; }
+  .field-error { color: var(--red); font-size: 12.5px; margin-top: 5px; }
+
+  .e-card { display: grid; grid-template-columns: minmax(160px, 1.2fr) minmax(120px, .8fr) minmax(130px, .9fr) auto; gap: 12px; align-items: start; }
+  .e-card .fld { display: flex; flex-direction: column; gap: 4px; }
+  .e-card .fld label { margin: 0; font-size: 12px; color: var(--faint); }
+  .e-card .row-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+  .e-card.off { opacity: .55; }
+  .role-note { font-size: 12px; color: var(--faint); }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(30, 34, 53, .45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--surface); border-radius: var(--r-lg);
+    box-shadow: var(--sh-md); padding: 22px 24px;
+    max-width: 420px; width: 100%;
+  }
+  .modal p { margin: 8px 0 18px; color: var(--muted); }
+  .modal .actions { justify-content: flex-end; }
+</style>
+
+<h1>Xodimlar</h1>
+<p class="page-sub">Lidlarni mas'ul xodimga biriktirish uchun ro'yxat. Rollar keyingi bosqichda cheklovlar uchun.</p>
+
+<div class="card">
+  <h2>Yangi xodim</h2>
+  <form method="post" action="/admin/employees/add" class="add-form" id="add-form" novalidate>
+    <div class="fld">
+      <label for="new-name">Ism familiya</label>
+      <input type="text" name="full_name" id="new-name" placeholder="Masalan: Sardor Aliyev">
+    </div>
+    <div class="fld">
+      <label for="new-login">Login</label>
+      <input type="text" name="login" id="new-login" placeholder="sardor">
+    </div>
+    <div class="fld">
+      <label for="new-role">Rol</label>
+      <select name="role" id="new-role">
+        {% for value, label in roles.items() %}
+        <option value="{{ value }}" {{ 'selected' if value == 'admin' else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit">Qo'shish</button>
+  </form>
+  <div class="field-error" id="name-error" hidden>Ism va loginni kiriting.</div>
+  <p class="hint">Hozircha tizimga faqat ADMIN_USER / ADMIN_PASSWORD orqali kiriladi — xodim loginlari keyingi bosqichda ishlaydi.</p>
+</div>
+
+{% for employee in employees %}
+<div class="card e-card {{ 'off' if not employee.is_enabled else '' }}" data-id="{{ employee.id }}">
+  <div class="fld">
+    <label>Ism familiya</label>
+    <input type="text" data-f="full_name" value="{{ employee.full_name }}" data-orig="{{ employee.full_name }}">
+  </div>
+  <div class="fld">
+    <label>Login</label>
+    <input type="text" data-f="login" value="{{ employee.login }}" data-orig="{{ employee.login }}">
+  </div>
+  <div class="fld">
+    <label>Rol</label>
+    <select data-f="role" data-orig="{{ employee.role }}">
+      {% for value, label in roles.items() %}
+      <option value="{{ value }}" {{ 'selected' if employee.role == value else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="row-actions">
+    <label class="nowrap" style="display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13px;font-weight:500;">
+      <input type="checkbox" data-f="is_enabled" {% if employee.is_enabled %}checked{% endif %}> Faol
+    </label>
+    <button type="button" class="danger small e-del">O'chirish</button>
+  </div>
+  <div class="role-note" style="grid-column:1/-1;">
+    {% if employee.role != 'admin' %}Rol: {{ roles[employee.role] }} — sahifa cheklovlari keyingi bosqichda ishlaydi.{% else %}Rol: admin{% endif %}
+  </div>
+</div>
+{% else %}
+<div class="card"><span class="muted">Hozircha xodim yo'q — yuqorida qo'shing.</span></div>
+{% endfor %}
+
+<div class="modal-backdrop" id="del-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Xodimni o'chirish</h2>
+    <p>Rostdan o'chirilsinmi?</p>
+    <div class="actions">
+      <button type="button" class="outline" id="del-cancel">Bekor qilish</button>
+      <button type="button" class="danger" id="del-confirm">O'chirish</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var timers = {};
+  function saveCard(card) {
+    var body = new URLSearchParams();
+    card.querySelectorAll("[data-f]").forEach(function (el) {
+      var f = el.dataset.f;
+      var v = el.type === "checkbox" ? (el.checked ? "on" : "") : el.value;
+      body.set(f, v);
+    });
+    fetch("/admin/employees/" + card.dataset.id + "/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) {
+      if (!r.ok) { showToast("Xatolik: saqlanmadi"); return; }
+      card.querySelectorAll("[data-orig]").forEach(function (el) { el.dataset.orig = el.value; });
+      card.classList.toggle("off", !card.querySelector("[data-f='is_enabled']").checked);
+      showToast("Saqlandi");
+    }).catch(function () { showToast("Tarmoq xatosi"); });
+  }
+
+  document.querySelectorAll(".e-card").forEach(function (card) {
+    ["change", "input"].forEach(function (evt) {
+      card.addEventListener(evt, function () {
+        clearTimeout(timers[card.dataset.id]);
+        timers[card.dataset.id] = setTimeout(function () { saveCard(card); }, 500);
+      });
+    });
+  });
+
+  var modal = document.getElementById("del-modal");
+  var pendingCard = null;
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".e-del");
+    if (!btn) return;
+    pendingCard = btn.closest(".e-card");
+    var name = pendingCard.querySelector("[data-f='full_name']").value;
+    modal.querySelector("p").textContent = 'Rostdan o\'chirilsinmi? "' + name + '" o\'chiriladi.';
+    modal.hidden = false;
+  });
+  function closeModal() { modal.hidden = true; pendingCard = null; }
+  document.getElementById("del-cancel").addEventListener("click", closeModal);
+  modal.addEventListener("click", function (e) { if (e.target === modal) closeModal(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
+  document.getElementById("del-confirm").addEventListener("click", function () {
+    if (!pendingCard) return;
+    var card = pendingCard;
+    fetch("/admin/employees/" + card.dataset.id + "/delete", { method: "POST" })
+      .then(function (r) {
+        if (!r.ok) { showToast("Xatolik: o'chirilmadi"); closeModal(); return; }
+        card.remove();
+        closeModal();
+        showToast("Xodim o'chirildi");
+      })
+      .catch(function () { showToast("Tarmoq xatosi"); closeModal(); });
+  });
+
+  var addForm = document.getElementById("add-form");
+  var nameInput = document.getElementById("new-name");
+  var loginInput = document.getElementById("new-login");
+  var nameError = document.getElementById("name-error");
+  [nameInput, loginInput].forEach(function (el) {
+    el.addEventListener("input", function () { nameError.hidden = true; });
+  });
+  addForm.addEventListener("submit", function (e) {
+    if (!nameInput.value.trim() || !loginInput.value.trim()) {
+      e.preventDefault();
+      nameError.hidden = false;
+      (nameInput.value.trim() ? loginInput : nameInput).focus();
+    }
+  });
+})();
+</script>
+{% endblock %}

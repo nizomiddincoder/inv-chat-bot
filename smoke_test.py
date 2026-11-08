@@ -41,6 +41,21 @@ r = client.post("/webhook", json={}, headers=HEADER)
 assert r.status_code == 200
 print("webhook auth OK")
 
+# --- 1b. Admin panel session login (cookie, not Basic auth) ---
+r = client.get("/admin/leads", follow_redirects=False)
+assert r.status_code == 302 and "/admin/login" in r.headers["location"], (r.status_code, r.headers)
+r = client.get("/admin/leads")  # follow the redirect -> login page
+assert "Markaz CRM" in r.text and "Parol" in r.text
+r = client.post("/admin/login", data={"login": "admin", "password": "wrong-pass"})
+assert r.status_code == 401 and "xato" in r.text
+r = client.post("/admin/login", data={"login": "admin", "password": "test-pass"}, follow_redirects=False)
+assert r.status_code == 303, r.status_code  # cookie is now stored by the test client
+print("session login OK")
+
+# from here on the test client carries the session cookie (variable kept for
+# the many headers=auth call sites; the cookie does the real work)
+auth = {}
+
 # --- Mock Telegram API and capture outgoing calls ---
 # send_message uses tg._post directly (to inspect errors), so mock _post.
 sent: list[tuple[str, dict]] = []
@@ -127,9 +142,10 @@ print("edited_business_message (name fix) OK")
 business_text("99 123 45 67")  # spaced local format
 all_texts = [p.get("text", "") for m, p in sent if m == "sendMessage"]
 assert any("qabul qilindi" in t for t in all_texts), all_texts[-1]
-# owner receives the new-lead notification (at OWNER_NOTIFY_CHAT_ID = 777)
+# owner receives the new-lead notification (at OWNER_NOTIFY_CHAT_ID = 777);
+# on repeat applications the same notification starts with "Takroriy murojaat"
 owner_notifs = [p for m, p in sent if m == "sendMessage" and p.get("chat_id") == 777]
-assert any("Yangi lid" in p["text"] for p in owner_notifs), owner_notifs
+assert any("Yangi lid" in p["text"] or "Takroriy murojaat" in p["text"] for p in owner_notifs), owner_notifs
 print("owner notification OK")
 
 with SessionLocal() as s:
@@ -271,7 +287,7 @@ with SessionLocal() as s:
     assert lead.source == "claude", lead.source
 # the notification went to OWNER_NOTIFY_CHAT_ID (777), not the owner chat (111)
 notifs = [p for m, p in sent[n:] if m == "sendMessage" and p.get("chat_id") == 777]
-assert notifs and "Yangi lid" in notifs[-1]["text"], notifs
+assert notifs and ("Yangi lid" in notifs[-1]["text"] or "Takroriy murojaat" in notifs[-1]["text"]), notifs
 assert not any(m == "sendMessage" and p.get("chat_id") == 111 for m, p in sent[n:]), \
     "notification must go to OWNER_NOTIFY_CHAT_ID, not OWNER_CHAT_ID"
 print("claude reply + [LEAD] + OWNER_NOTIFY_CHAT_ID OK")
@@ -292,11 +308,8 @@ assert "Assalomu alaykum" in sent[-1][1]["text"], sent[-1][1]["text"]
 settings.ANTHROPIC_API_KEY = ""  # disable Claude mode again
 print("claude fallback to built-in flow OK")
 
-# --- 8. Admin panel auth ---
-auth = {"Authorization": "Basic " + base64.b64encode(b"admin:test-pass").decode()}
+# --- 8. Admin panel pages (session cookie from step 1b) ---
 r = client.get("/admin/leads", follow_redirects=False)
-assert r.status_code == 401, r.status_code
-r = client.get("/admin/leads", headers=auth, follow_redirects=False)
 assert r.status_code == 200, r.status_code
 assert "Lidlar" in r.text
 # courses page renders
@@ -323,7 +336,15 @@ with SessionLocal() as s:
     assert s.get(Lead, lead_id).status == target
 r = client.post(f"/admin/leads/{lead_id}/move", data={"status": "bogus"}, headers=auth)
 assert r.json().get("ok") is False
-print("kanban board + move endpoint OK")
+# moving to "Rad etildi" without a reason is rejected; with a reason it works
+r = client.post(f"/admin/leads/{lead_id}/move", data={"status": "rejected"}, headers=auth)
+assert r.json().get("ok") is False and "sababi" in r.json()["error"]
+r = client.post(f"/admin/leads/{lead_id}/move", data={"status": "rejected", "reason": "narx"}, headers=auth)
+assert r.json().get("ok") is True
+with SessionLocal() as s:
+    assert s.get(Lead, lead_id).reject_reason == "narx"
+client.post(f"/admin/leads/{lead_id}/move", data={"status": old_status}, headers=auth)
+print("kanban board + move endpoint + reject reason OK")
 # old messages page is gone, replaced by the AI page
 r = client.get("/admin/messages", headers=auth, follow_redirects=False)
 assert r.status_code == 404, r.status_code
@@ -420,6 +441,96 @@ client.post(f"/admin/teachers/{teacher.id}/delete", headers=auth, follow_redirec
 with SessionLocal() as s:
     assert s.query(Teacher).filter(Teacher.full_name == "Nodira Ismoilova").count() == 0
 print("teachers/groups CRUD cleanup OK")
+
+# --- 8c. Employees, manual leads (phone dedup), notes history, follow-up ---
+from app.database import _migrate_data  # noqa: E402
+from app.models import Employee, LeadNote  # noqa: E402
+
+# pre-clean leftovers from an earlier crashed run (re-run safe)
+with SessionLocal() as s:
+    s.query(Lead).filter(Lead.phone.in_(["+998934445566", "934445566"])).delete(synchronize_session=False)
+    s.query(Lead).filter(Lead.telegram_user_id == 999001).delete(synchronize_session=False)
+    s.query(LeadNote).filter(LeadNote.lead_id.not_in(s.query(Lead.id))).delete(synchronize_session=False)
+    s.query(Employee).filter(Employee.login == "sardor").delete(synchronize_session=False)
+    s.commit()
+
+client.post("/admin/employees/add", data={"full_name": "Sardor Aliyev", "login": "sardor", "role": "operator"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    emp = s.query(Employee).filter(Employee.login == "sardor").one()
+r = client.get("/admin/employees", headers=auth)
+assert r.status_code == 200 and "sardor" in r.text and "Operator" in r.text
+
+# manual lead: creates once, then the same phone updates + repeat marker
+client.post("/admin/leads/add", data={"full_name": "Oybek Sultonov", "phone": "934445566", "course": "Trading", "source": "instagram", "assigned_to": str(emp.id), "follow_up_at": "2026-11-01"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    lead2 = s.query(Lead).filter(Lead.phone == "+998934445566").one()
+    assert lead2.source == "instagram" and lead2.assigned_to == emp.id, (lead2.source, lead2.assigned_to)
+    assert lead2.follow_up_at.isoformat() == "2026-11-01"
+    assert (lead2.repeat_count or 0) == 0
+    lid_id = lead2.id
+client.post("/admin/leads/add", data={"full_name": "Oybek Sultonov", "phone": "+998 93 444 55 66", "source": "tavsiya"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    assert s.query(Lead).filter(Lead.phone == "+998934445566").count() == 1
+    lead2 = s.get(Lead, lid_id)
+    assert lead2.repeat_count == 1 and lead2.source == "tavsiya"
+print("manual lead + phone dedup + repeat marker OK")
+
+# notes history: add with author, list via API
+r = client.post(f"/admin/leads/{lid_id}/notes", data={"text": "Qo'ng'iroq qilindi, narxni so'radi"}, headers=auth)
+assert r.json()["ok"] is True and r.json()["note"]["author"] == "admin"
+r = client.get(f"/admin/leads/{lid_id}/notes", headers=auth)
+notes = r.json()["notes"]
+assert len(notes) == 1 and "Qo'ng'iroq" in notes[0]["text"] and notes[0]["created"]
+
+# assign + follow-up endpoints
+r = client.post(f"/admin/leads/{lid_id}/assign", data={"assigned_to": str(emp.id)}, headers=auth)
+assert r.json()["ok"] is True
+r = client.post(f"/admin/leads/{lid_id}/followup", data={"follow_up_at": "2026-11-20"}, headers=auth)
+assert r.json()["ok"] is True
+
+# the leads page shows the repeat badge and the red overdue date
+r = client.get("/admin/leads", headers=auth)
+assert "takroriy" in r.text and "overdue" in r.text and "Instagram" in r.text
+
+# reject status requires a reason (status endpoint too)
+r = client.post(f"/admin/leads/{lid_id}/status", data={"status": "rejected"}, headers=auth)
+assert r.status_code == 400 and r.json()["ok"] is False
+r = client.post(f"/admin/leads/{lid_id}/status", data={"status": "rejected", "reason": "javob_yoq"}, headers=auth)
+assert r.json()["ok"] is True
+with SessionLocal() as s:
+    assert s.get(Lead, lid_id).reject_reason == "javob_yoq"
+print("assign/followup/notes/reject-reason OK")
+
+# unauthenticated access is blocked everywhere
+client2 = TestClient(app)
+r = client2.get("/admin/employees", follow_redirects=False)
+assert r.status_code == 302 and "/admin/login" in r.headers["location"]
+r = client2.post(f"/admin/leads/{lid_id}/notes", data={"text": "x"})
+assert r.status_code == 401
+r = client2.post(f"/admin/leads/{lid_id}/move", data={"status": "new"})
+assert r.status_code == 401
+print("unauthenticated access blocked OK")
+
+# old free-text notes move into the history during migration
+with SessionLocal() as s:
+    l3 = Lead(telegram_user_id=999001, full_name="Eski Lid", phone="+998990001122",
+              status="new", source="telegram_bot", notes="qo'lda yozilgan eski izoh")
+    s.add(l3)
+    s.commit()
+    l3id = l3.id
+_migrate_data()
+with SessionLocal() as s:
+    l3 = s.get(Lead, l3id)
+    assert l3.notes is None
+    note = s.query(LeadNote).filter(LeadNote.lead_id == l3id).one()
+    assert "eski izoh" in note.text and note.author == "Eski izoh"
+print("old notes -> history migration OK")
+
+# employee cleanup
+client.post(f"/admin/employees/{emp.id}/delete", headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    assert s.query(Employee).filter(Employee.login == "sardor").count() == 0
+print("employees CRUD OK")
 # settings page renders
 r = client.get("/admin/settings", headers=auth)
 assert r.status_code == 200 and "Owner chat ID" in r.text

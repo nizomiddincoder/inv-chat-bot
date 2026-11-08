@@ -33,6 +33,7 @@ from .services import (
     normalize_phone,
     render,
     set_state,
+    source_label,
     upsert_lead,
     validate_name,
 )
@@ -374,7 +375,7 @@ def _save_claude_lead(
         course=course_name,
         full_name=full_name,
         phone=normalized,
-        source="claude",
+        source="telegram_bot",
     )
     _notify_owner_new_lead(lead)
 
@@ -571,11 +572,15 @@ def _notify_owner_new_lead(lead) -> None:
 
     username = f"@{lead.username}" if lead.username else "yo'q"
     created = lead.created_at.astimezone(TZ).strftime("%d.%m.%Y %H:%M")
+    repeat = (lead.repeat_count or 0) > 0
     text = (
-        "🆕 Yangi lid!\n"
+        "🆕 Takroriy murojaat!\n" if repeat else "🆕 Yangi lid!\n"
+    )
+    text += (
         f"Ism: {lead.full_name}\n"
         f"Telefon: {lead.phone}\n"
-        f"Kurs: {lead.course}\n"
+        f"Kurs: {lead.course or '—'}\n"
+        f"Manba: {source_label(lead.source)}\n"
         f"Username: {username}\n"
         f"Vaqt: {created}"
     )

@@ -16,8 +16,10 @@ from .models import (
     ChatState,
     ChatHistory,
     Course,
+    Employee,
     Group,
     Lead,
+    LeadNote,
     ProcessedUpdate,
     Setting,
     Teacher,
@@ -27,6 +29,44 @@ from .models import (
 log = logging.getLogger("bot.services")
 
 TZ = ZoneInfo("Asia/Tashkent")
+
+# ---------------------------------------------------------------------------
+# CRM dictionaries (labels shown in the admin panel, keys stored in the DB)
+# ---------------------------------------------------------------------------
+
+SOURCES = {
+    "telegram_bot": "Telegram bot",
+    "instagram": "Instagram",
+    "meta": "Meta reklama",
+    "tavsiya": "Tavsiya",
+    "yurish": "Yurish",
+    "boshqa": "Boshqa",
+}
+# Old values saved by earlier versions of the bot also mean "Telegram bot".
+SOURCE_ALIASES = {"telegram": "telegram_bot", "claude": "telegram_bot", "": "boshqa"}
+
+ROLES = {
+    "admin": "Admin",
+    "operator": "Operator",
+    "teacher": "O'qituvchi",
+    "accountant": "Buxgalter",
+}
+# Roles with no page visibility yet — prepared for a later stage.
+ROLE_ACTIVE = {"admin"}
+
+REJECT_REASONS = {
+    "narx": "Narx qimmat",
+    "boshqa_markaz": "Boshqa markazga ketdi",
+    "javob_yoq": "Javob bermadi",
+    "vaqt_yoq": "Vaqti yo'q",
+    "boshqa": "Boshqa",
+}
+
+
+def source_label(value: str | None) -> str:
+    """Human-readable source name for a stored key."""
+    key = SOURCE_ALIASES.get(value or "", value or "")
+    return SOURCES.get(key, key or "—")
 
 # Default bot message templates. Stored in the DB on first start and
 # editable in the admin panel (Messages page). {first_name} and {course}
@@ -455,11 +495,13 @@ def upsert_lead(
     course: str | None,
     full_name: str,
     phone: str,
-    source: str = "telegram",
+    source: str = "telegram_bot",
 ) -> Lead:
     """Create a lead, or update the existing one for the same user/phone.
 
-    Deduplication rule: same telegram_user_id OR same phone -> update, no duplicate.
+    Deduplication rule: same telegram_user_id OR same phone -> update the
+    existing row (never a duplicate) and mark it as a repeat request
+    ("takroriy murojaat", repeat_count > 0).
     """
     now = utcnow()
     with SessionLocal() as session:
@@ -477,11 +519,16 @@ def upsert_lead(
             if first_name:
                 lead.first_name = first_name
             lead.updated_at = now
+            lead.repeat_count = (lead.repeat_count or 0) + 1
             # Allow the 24h follow-up timer again for a re-opened lead.
             lead.followup_sent_at = None
             if lead.status == "rejected":
                 lead.status = "new"
-            log.info("Lead updated: id=%s name=%s phone=%s", lead.id, full_name, phone)
+                lead.reject_reason = None
+            log.info(
+                "Lead updated (repeat #%s): id=%s name=%s phone=%s",
+                lead.repeat_count, lead.id, full_name, phone,
+            )
         else:
             lead = Lead(
                 telegram_user_id=telegram_user_id,
@@ -503,3 +550,92 @@ def upsert_lead(
         # CRM adapter hook (currently a no-op stub, see crm.py)
         push_lead(lead)
         return lead
+
+
+def upsert_manual_lead(
+    full_name: str,
+    phone: str,
+    course: str | None = None,
+    source: str = "boshqa",
+    assigned_to: int | None = None,
+) -> Lead:
+    """Lead added manually from the admin panel.
+
+    Duplicate rule (spec): same phone -> update the existing lead and mark
+    it as a repeat request instead of creating a second row.
+    """
+    now = utcnow()
+    with SessionLocal() as session:
+        lead = session.query(Lead).filter(Lead.phone == phone).first()
+        if lead is not None:
+            lead.full_name = full_name or lead.full_name
+            if course:
+                lead.course = course
+            lead.source = source
+            if assigned_to:
+                lead.assigned_to = assigned_to
+            lead.updated_at = now
+            lead.repeat_count = (lead.repeat_count or 0) + 1
+            lead.followup_sent_at = None
+            if lead.status == "rejected":
+                lead.status = "new"
+                lead.reject_reason = None
+            log.info(
+                "Manual lead updated (repeat #%s): id=%s phone=%s",
+                lead.repeat_count, lead.id, phone,
+            )
+        else:
+            lead = Lead(
+                # Manual leads have no Telegram account — unique negative id.
+                telegram_user_id=0,  # assigned below
+                full_name=full_name,
+                phone=phone,
+                course=course,
+                status="new",
+                source=source,
+                assigned_to=assigned_to or None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(lead)
+            session.flush()
+            lead.telegram_user_id = -lead.id  # manual ids: negative, always unique
+            log.info("Manual lead created: name=%s phone=%s source=%s", full_name, phone, source)
+        session.commit()
+        session.refresh(lead)
+        push_lead(lead)
+        return lead
+
+
+# ---------------------------------------------------------------------------
+# Employees and lead notes
+# ---------------------------------------------------------------------------
+
+def get_employees(enabled_only: bool = False) -> list[Employee]:
+    with SessionLocal() as session:
+        query = session.query(Employee).order_by(Employee.full_name, Employee.id)
+        if enabled_only:
+            query = query.filter(Employee.is_enabled.is_(True))
+        return query.all()
+
+
+def get_lead_notes(lead_id: int, limit: int = 50) -> list[LeadNote]:
+    """A lead's comment history, oldest first."""
+    with SessionLocal() as session:
+        return (
+            session.query(LeadNote)
+            .filter(LeadNote.lead_id == lead_id)
+            .order_by(LeadNote.id.desc())
+            .limit(limit)
+            .all()
+        )
+
+
+def add_lead_note(lead_id: int, text: str, author: str | None) -> LeadNote:
+    """Append one entry to a lead's comment history."""
+    with SessionLocal() as session:
+        note = LeadNote(lead_id=lead_id, text=text[:2000], author=author or None)
+        session.add(note)
+        session.commit()
+        session.refresh(note)
+    return note

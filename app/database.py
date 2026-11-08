@@ -65,28 +65,79 @@ def _seed_defaults() -> None:
 def _migrate_schema() -> None:
     """Add columns to existing tables that create_all won't touch.
 
-    create_all only creates MISSING tables — columns added to Course later
-    (price, duration, teacher_id, description) must be added manually, or
-    existing deployments (Railway PostgreSQL) would crash on the new fields.
-    Simple ALTER TABLE ADD COLUMN works on both PostgreSQL and SQLite.
+    create_all only creates MISSING tables — columns added to existing
+    tables later must be added manually, or existing deployments (Railway
+    PostgreSQL) would crash on the new fields. Simple ALTER TABLE ADD COLUMN
+    works on both PostgreSQL and SQLite.
     """
     from sqlalchemy import inspect, text
 
     inspector = inspect(engine)
-    if "courses" not in inspector.get_table_names():
-        return  # first start — create_all builds the full table anyway
-    existing = {col["name"] for col in inspector.get_columns("courses")}
+    table_names = set(inspector.get_table_names())
     additions = {
-        "description": "TEXT",
-        "price": "VARCHAR(60)",
-        "duration": "VARCHAR(60)",
-        "teacher_id": "INTEGER",
+        "courses": {
+            "description": "TEXT",
+            "price": "VARCHAR(60)",
+            "duration": "VARCHAR(60)",
+            "teacher_id": "INTEGER",
+        },
+        "leads": {
+            "assigned_to": "INTEGER",
+            "follow_up_at": "DATE",
+            "reject_reason": "VARCHAR(60)",
+            "repeat_count": "INTEGER",
+        },
     }
     with engine.begin() as conn:
-        for column, col_type in additions.items():
-            if column not in existing:
-                conn.execute(text(f"ALTER TABLE courses ADD COLUMN {column} {col_type}"))
-                log.info("Migration: added courses.%s column", column)
+        for table, columns in additions.items():
+            if table not in table_names:
+                continue  # first start — create_all builds the full table anyway
+            existing = {col["name"] for col in inspector.get_columns(table)}
+            for column, col_type in columns.items():
+                if column not in existing:
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                    )
+                    log.info("Migration: added %s.%s column", table, column)
+
+
+def _migrate_data() -> None:
+    """One-time data migrations. Never deletes old data.
+
+    - the old free-text lead "notes" field moves into the lead_notes history
+      (with its last-update timestamp) and the field is cleared;
+    - leads without a source get "telegram_bot" (they all arrived via the bot).
+    """
+    from .models import Lead, LeadNote, utcnow
+
+    with SessionLocal() as session:
+        moved = 0
+        for lead in session.query(Lead).filter(
+            Lead.notes.isnot(None), Lead.notes != ""
+        ).all():
+            session.add(
+                LeadNote(
+                    lead_id=lead.id,
+                    text=lead.notes,
+                    author="Eski izoh",
+                    created_at=lead.updated_at or utcnow(),
+                )
+            )
+            lead.notes = None
+            moved += 1
+
+        source_set = (
+            session.query(Lead)
+            .filter(Lead.source.is_(None))
+            .update({Lead.source: "telegram_bot"}, synchronize_session=False)
+        )
+        if moved or source_set:
+            session.commit()
+            log.info(
+                "Data migration: %s note(s) moved to history, %s lead(s) got a source",
+                moved,
+                source_set,
+            )
 
 
 def init_db() -> None:
@@ -101,6 +152,7 @@ def init_db() -> None:
     try:
         Base.metadata.create_all(engine)
         _migrate_schema()
+        _migrate_data()
     except Exception:
         # Log the full error so the owner can see the exact problem in Railway logs.
         log.exception(
