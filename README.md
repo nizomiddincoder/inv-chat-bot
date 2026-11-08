@@ -207,6 +207,7 @@ lead) against a local SQLite database and prints `ALL_SMOKE_TESTS_PASSED` on suc
 | `Webhook set successfully` is missing | `PUBLIC_URL` is wrong (no `https://`, or trailing `/`) or `WEBHOOK_SECRET` is empty. |
 | `403 Forbidden` spam in logs | Something is calling `/webhook` without the secret — harmless, Telegram requests will still work. |
 | `Telegram API sendMessage failed: ...` | Read the description. Common: `bot was blocked by the user`, or the owner never pressed Start in the bot chat. |
+| `BUSINESS_PEER_INVALID` | The reply was sent to a chat that does not belong to the connected business account. Check: **Settings → Business → Chatbots** — disconnect and reconnect the bot (required after changing bot settings in @BotFather); make sure **Business Mode** is enabled in @BotFather; make sure the chat is not excluded in the Chatbots chat list. The bot retries once without the connection id and logs the details. |
 | `Unauthorized` from Telegram | Wrong `BOT_TOKEN`. |
 | Admin panel asks for login forever | Wrong `ADMIN_USER` / `ADMIN_PASSWORD` values. |
 

@@ -336,6 +336,12 @@ def _maybe_handle_admin_command(chat_id: int, text: str, business_connection_id:
     else:  # /yordam, /admin
         reply = ADMIN_HELP
 
+    if chat_id == owner_chat_id:
+        # The owner's own chat is NOT a business peer — sending there with a
+        # business_connection_id fails with BUSINESS_PEER_INVALID. The owner
+        # started the bot, so a direct message always works.
+        business_connection_id = None
+
     tg.send_message(chat_id, reply, business_connection_id=business_connection_id)
     log.info("Admin command %s executed for chat %s", command, chat_id)
     return True

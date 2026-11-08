@@ -14,22 +14,30 @@ def _base_url() -> str:
     return f"https://api.telegram.org/bot{settings.BOT_TOKEN}"
 
 
-def call(method: str, payload: dict) -> dict | None:
-    """Call a Telegram Bot API method. Returns the result dict, or None on error."""
+def _post(method: str, payload: dict) -> tuple[dict | None, str | None]:
+    """Low-level API call. Returns (result, error_description)."""
     if not settings.BOT_TOKEN:
         log.error("BOT_TOKEN is not set — cannot call Telegram API")
-        return None
+        return None, "BOT_TOKEN is not set"
     try:
         response = _client.post(f"{_base_url()}/{method}", json=payload)
         data = response.json()
         if not data.get("ok"):
             # Telegram always explains the problem in "description" — show it in logs.
-            log.error("Telegram API %s failed: %s", method, data.get("description", data))
-            return None
-        return data.get("result")
+            description = data.get("description", str(data))
+            return None, description
+        return data.get("result"), None
     except Exception:
         log.exception("Telegram API %s request error", method)
-        return None
+        return None, "request error (see exception above)"
+
+
+def call(method: str, payload: dict) -> dict | None:
+    """Call a Telegram Bot API method. Returns the result dict, or None on error."""
+    result, error = _post(method, payload)
+    if error:
+        log.error("Telegram API %s failed: %s", method, error)
+    return result
 
 
 def set_webhook() -> bool:
@@ -57,19 +65,48 @@ def set_webhook() -> bool:
     return False
 
 
+BUSINESS_ERRORS = ("BUSINESS_PEER_INVALID", "BUSINESS_CONNECTION_INVALID")
+
+
 def send_message(
     chat_id: int | str,
     text: str,
     business_connection_id: str | None = None,
     reply_markup: dict | None = None,
 ) -> dict | None:
-    """Send a message. business_connection_id is REQUIRED for business chats."""
+    """Send a message. business_connection_id is REQUIRED for business chats.
+
+    If Telegram answers BUSINESS_PEER_INVALID / BUSINESS_CONNECTION_INVALID, the
+    message is retried once WITHOUT the connection id (harmless: a 400 response
+    means nothing was delivered, so no duplicate can happen) and the log shows
+    an actionable hint for the owner.
+    """
     payload: dict = {"chat_id": chat_id, "text": text}
     if business_connection_id:
         payload["business_connection_id"] = business_connection_id
     if reply_markup:
         payload["reply_markup"] = reply_markup
-    return call("sendMessage", payload)
+
+    result, error = _post("sendMessage", payload)
+
+    if result is None and business_connection_id and error and any(e in error for e in BUSINESS_ERRORS):
+        log.error(
+            "sendMessage to chat %s failed: %s (business_connection_id=%s). "
+            "HINT: the chat must belong to the connected business account. Check: "
+            "1) Settings -> Business -> Chatbots -> reconnect this bot; "
+            "2) BotFather -> /mybots -> Bot Settings -> Business Mode is enabled; "
+            "3) the chat is not excluded in the Chatbots chat list. "
+            "Retrying once WITHOUT the connection id...",
+            chat_id,
+            error,
+            business_connection_id,
+        )
+        payload.pop("business_connection_id", None)
+        result, error = _post("sendMessage", payload)
+
+    if result is None and error:
+        log.error("Telegram API sendMessage failed: %s (chat_id=%s)", error, chat_id)
+    return result
 
 
 def answer_callback(callback_query_id: int | str, text: str | None = None) -> dict | None:

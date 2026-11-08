@@ -37,8 +37,9 @@ assert r.status_code == 200
 print("webhook auth OK")
 
 # --- Mock Telegram API and capture outgoing calls ---
+# send_message uses tg._post directly (to inspect errors), so mock _post.
 sent: list[tuple[str, dict]] = []
-tg.call = lambda method, payload: sent.append((method, payload)) or {}
+tg._post = lambda method, payload: (sent.append((method, payload)) or {}, None)
 
 # --- 2. business_connection update is stored ---
 r = client.post(
@@ -154,7 +155,9 @@ client.post(
 assert len(sent) > n, "owner got no reply to /lidlar"
 assert sent[-1][0] == "sendMessage"
 assert "Lidlar statistikasi" in sent[-1][1]["text"], sent[-1][1]["text"]
-assert sent[-1][1].get("business_connection_id") == "conn1"
+# The owner's own chat is NOT a business peer: the reply must NOT carry
+# business_connection_id (that caused BUSINESS_PEER_INVALID in production).
+assert sent[-1][1].get("business_connection_id") is None, sent[-1][1]
 assert sent[-1][1].get("chat_id") == 111
 
 # owner's normal chatter is still ignored (restriction is only for commands)
@@ -195,6 +198,23 @@ client.post(
 )
 assert "Assalomu alaykum" in sent[-1][1]["text"], sent[-1][1]["text"]
 print("admin command blocked for non-owner OK (flow unaffected)")
+
+# --- 7d. BUSINESS_PEER_INVALID fallback: customer reply is retried without conn id ---
+calls: list[dict] = []
+
+def fake_post(method, payload):
+    calls.append(payload)
+    if method == "sendMessage" and payload.get("business_connection_id") == "conn1":
+        return None, "Bad Request: BUSINESS_PEER_INVALID"  # first attempt fails
+    return {"message_id": 1}, None  # retry without conn id succeeds
+
+tg._post = fake_post
+business_text("/start")
+assert any("business_connection_id" not in p for p in calls), "no retry happened"
+assert calls[-1].get("business_connection_id") is None
+assert "Assalomu alaykum" in calls[-1]["text"]
+tg._post = lambda method, payload: (sent.append((method, payload)) or {}, None)  # restore mock
+print("BUSINESS_PEER_INVALID fallback OK")
 
 # --- 8. Admin panel auth ---
 auth = {"Authorization": "Basic " + base64.b64encode(b"admin:test-pass").decode()}
