@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inventor admin</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Arial, sans-serif; margin: 0; background: #f4f6f8; color: #222; }
+    nav { background: #1f3b73; padding: 10px 16px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+    nav .brand { color: #fff; font-weight: 700; margin-right: 8px; }
+    nav a { color: #d5e0f5; text-decoration: none; font-weight: 600; padding: 4px 8px; border-radius: 4px; }
+    nav a.active, nav a:hover { color: #fff; background: rgba(255,255,255,.12); }
+    main { max-width: 1050px; margin: 16px auto; padding: 0 12px; }
+    h1 { font-size: 22px; }
+    .table-wrap { overflow-x: auto; background: #fff; border: 1px solid #e2e6ea; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 700px; }
+    th, td { border-bottom: 1px solid #e9edf1; padding: 8px 10px; text-align: left; vertical-align: middle; }
+    th { background: #eef2f7; white-space: nowrap; }
+    tr:hover td { background: #fafbfc; }
+    input, select, textarea, button { padding: 6px 9px; font-size: 14px; border: 1px solid #c9d1d9; border-radius: 5px; background: #fff; }
+    textarea { width: 100%; min-height: 90px; font-family: inherit; }
+    button { background: #1f3b73; color: #fff; border: none; cursor: pointer; font-weight: 600; }
+    button:hover { background: #2a4d94; }
+    button.danger { background: #c0392b; }
+    button.small { padding: 4px 8px; font-size: 13px; }
+    form.inline { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+    .card { background: #fff; border: 1px solid #e2e6ea; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .card h2 { margin-top: 0; font-size: 17px; }
+    label { display: block; margin: 10px 0 4px; font-weight: 600; font-size: 14px; }
+    .hint { color: #667; font-size: 13px; font-weight: 400; }
+    .flash { background: #e6f7e6; border: 1px solid #9c6; color: #265a26; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; }
+    a.btn { display: inline-block; padding: 6px 10px; background: #1f3b73; color: #fff; text-decoration: none; border-radius: 5px; font-size: 14px; font-weight: 600; }
+    .muted { color: #778; font-size: 13px; }
+    code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">Inventor Innovation Center</span>
+    <a href="/admin/leads" class="{{ 'active' if active == 'leads' else '' }}">Lidlar</a>
+    <a href="/admin/courses" class="{{ 'active' if active == 'courses' else '' }}">Kurslar</a>
+    <a href="/admin/messages" class="{{ 'active' if active == 'messages' else '' }}">Xabarlar</a>
+    <a href="/admin/settings" class="{{ 'active' if active == 'settings' else '' }}">Sozlamalar</a>
+  </nav>
+  <main>
+    {% if saved %}<div class="flash">✅ Saqlandi</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

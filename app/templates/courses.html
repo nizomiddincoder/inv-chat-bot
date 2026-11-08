@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Kurslar</h1>
+
+<div class="card">
+  <h2>Yangi kurs qo'shish</h2>
+  <form method="post" action="/admin/courses/add" class="inline">
+    <input type="text" name="name" placeholder="Kurs nomi" required>
+    <input type="number" name="sort_order" value="0" title="Tartib raqami" style="width:80px">
+    <button>Qo'shish</button>
+  </form>
+  <p class="hint">Yoqilgan kurslar botdagi tugmalarda darhol paydo bo'ladi. "Tartib" — ro'yxatdagi joyi.</p>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Nomi</th><th>Tartib</th><th>Yoqilgan</th><th>Amallar</th></tr>
+  {% for course in courses %}
+  <tr>
+    <td>
+      <form method="post" action="/admin/courses/{{ course.id }}/update" class="inline">
+        <input type="text" name="name" value="{{ course.name }}" size="24">
+    </td>
+    <td>
+        <input type="number" name="sort_order" value="{{ course.sort_order }}" style="width:70px">
+    </td>
+    <td>
+        <input type="checkbox" name="is_enabled" {{ 'checked' if course.is_enabled else '' }}>
+    </td>
+    <td>
+        <button class="small">Saqlash</button>
+      </form>
+      <form method="post" action="/admin/courses/{{ course.id }}/delete" class="inline"
+            onsubmit="return confirm('Haqiqatan ham olib tashlansinmi?');">
+        <button class="small danger">O'chirish</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="muted">Hozircha kurs yo'q.</td></tr>
+  {% endfor %}
+</table>
+</div>
+{% endblock %}

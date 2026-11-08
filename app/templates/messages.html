@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Bot xabarlari</h1>
+
+<p class="hint">
+  Bu yerdan bot yuboradigan matnlarni o'zgartirasiz.
+  <code>{first_name}</code> — foydalanuvchi ismi, <code>{course}</code> — kurs nomi bilan almashtiriladi.
+</p>
+
+{% for msg in messages %}
+<div class="card">
+  <form method="post" action="/admin/messages/{{ msg.key }}">
+    <label>{{ msg.label }}</label>
+    <textarea name="text">{{ msg.text }}</textarea>
+    <div style="margin-top:8px"><button class="small">Saqlash</button></div>
+  </form>
+</div>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Sozlamalar</h1>
+
+<div class="card">
+  <form method="post" action="/admin/settings">
+    <label>Ish vaqti boshlanishi ({{ tz }})</label>
+    <input type="time" name="work_start" value="{{ work_start }}" required>
+
+    <label>Ish vaqti tugashi ({{ tz }})</label>
+    <input type="time" name="work_end" value="{{ work_end }}" required>
+
+    <label>Owner chat ID (eganing Telegram raqami ID)</label>
+    <input type="text" name="owner_chat_id" value="{{ owner_chat_id }}" placeholder="masalan: 123456789">
+    <p class="hint">
+      Yangi lid haqidagi xabar va 24 soatlik eslatma shu chatga yuboriladi.
+      ID ni bilish uchun botga <a href="https://t.me/userinfobot">@userinfobot</a> dan biror xabar yozing.
+    </p>
+    <div style="margin-top:8px"><button>Saqlash</button></div>
+  </form>
+</div>
+{% endblock %}
