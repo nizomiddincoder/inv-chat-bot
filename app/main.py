@@ -1,5 +1,7 @@
 """FastAPI application: webhook endpoint, health check, admin panel, startup tasks."""
 import logging
+import re
+import traceback as tb_module
 from contextlib import asynccontextmanager
 
 from fastapi import Body, Header, HTTPException, Request
@@ -35,6 +37,8 @@ async def lifespan(_: object):
     set_webhook()      # tell Telegram where to deliver updates
     start_followup_thread()  # 24h follow-up reminders, background thread
     start_reminders_thread()  # group/trial/debt Telegram reminders, background thread
+    from .backup import start_backup_thread
+    start_backup_thread()     # daily 03:00 Tashkent DB backups, background thread
     if claude_client.is_enabled():
         logging.getLogger("startup").info(
             "Claude mode ON: model=%s, knowledge files: %d",
@@ -50,9 +54,151 @@ async def lifespan(_: object):
 
 
 from fastapi import BackgroundTasks, FastAPI  # noqa: E402  (import after logging setup)
+from fastapi.responses import HTMLResponse, Response  # noqa: E402
 
 app = FastAPI(title="Inventor Innovation Center Bot", lifespan=lifespan)
 app.include_router(admin_router)
+
+# ---------------------------------------------------------------------------
+# Error journal: every unhandled (500) error lands in error_log with secrets
+# scrubbed, viewable in Boshqaruv > Xatolar.
+# ---------------------------------------------------------------------------
+
+_SECRET_PATTERNS = [
+    (re.compile(r"\d{8,10}:AA[\w-]{30,}"), "***bot-token***"),
+    (re.compile(r"sk-[A-Za-z0-9\-_]{10,}"), "***api-key***"),
+    (re.compile(r"(password|parol|token|secret|api[-_]?key|authorization)=[^&\s'\"]+", re.I), r"\1=***"),
+]
+
+
+def _sanitize(text: str) -> str:
+    """Remove tokens, passwords and keys from an error text."""
+    for secret_name in (
+        "BOT_TOKEN", "ADMIN_PASSWORD", "WEBHOOK_SECRET",
+        "ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "SESSION_SECRET",
+    ):
+        secret = getattr(settings, secret_name, "") or ""
+        if len(secret) >= 6 and secret in text:
+            text = text.replace(secret, "***")
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text[:4000]
+
+
+def _log_error_to_db(request: Request, exc: Exception) -> None:
+    from .auth import verify_session
+    from .database import SessionLocal
+    from .models import ErrorLog
+
+    try:
+        full = "".join(tb_module.format_exception(type(exc), exc, exc.__traceback__))
+        login = verify_session(request.cookies.get("markaz_session", "")) or ""
+        with SessionLocal() as session:
+            session.add(
+                ErrorLog(
+                    method=request.method,
+                    path=request.url.path[:200],
+                    user=login,
+                    message=_sanitize(f"{type(exc).__name__}: {exc}")[:500],
+                    traceback_text=_sanitize(full),
+                )
+            )
+            session.commit()
+    except Exception:
+        logging.getLogger("errors").exception("Could not store error in error_log")
+
+
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request: Request, exc: Exception):
+    """Catch every unhandled exception: journal it (sanitized), answer 500."""
+    logging.getLogger("errors").error(
+        "Unhandled error on %s %s: %s", request.method, request.url.path, exc
+    )
+    _log_error_to_db(request, exc)
+    if request.url.path.startswith("/admin/") and "text/html" in request.headers.get("accept", ""):
+        return HTMLResponse(
+            "<h1>Server xatosi</h1><p>Xatolik jurnalga yozildi. "
+            "Boshqaruv &gt; Xatolar sahifasida ko'rishingiz mumkin.</p>",
+            status_code=500,
+        )
+    return JSONResponse({"ok": False, "error": "Server xatosi"}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# PWA: installable admin app ("Ekranga qo'shish"), offline shows a notice
+# ---------------------------------------------------------------------------
+
+_APP_ICON_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'>"
+    "<circle cx='256' cy='256' r='256' fill='#5B6CF0'/>"
+    "<text x='256' y='345' font-family='Arial,sans-serif' font-size='250' "
+    "font-weight='700' fill='white' text-anchor='middle'>M</text></svg>"
+)
+
+_SW_JS = """
+// Minimal service worker: online-first, offline shows "Internet yo'q".
+var OFFLINE_HTML = "<!doctype html><html lang='uz'><head><meta charset='utf-8'>" +
+  "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
+  "<style>body{font-family:system-ui,Arial,sans-serif;background:#F4F5FD;color:#1E2235;" +
+  "display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}" +
+  "div{text-align:center}h1{font-size:20px}p{color:#6B7180}</style></head><body>" +
+  "<div><h1>Internet yo'q</h1><p>Internetga ulanib, sahifani qayta yuklang.</p></div></body></html>";
+
+self.addEventListener("install", function (event) {
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", function (event) {
+  event.waitUntil(self.clients.claim());
+});
+
+self.addEventListener("fetch", function (event) {
+  if (event.request.method !== "GET") return;
+  event.respondWith(
+    fetch(event.request).catch(function () {
+      if (event.request.mode === "navigate") {
+        return new Response(OFFLINE_HTML, {
+          status: 503,
+          headers: { "Content-Type": "text/html; charset=utf-8" }
+        });
+      }
+      return Response.error();
+    })
+  );
+});
+"""
+
+
+@app.get("/manifest.webmanifest")
+def pwa_manifest() -> JSONResponse:
+    return JSONResponse(
+        {
+            "name": "Markaz CRM — Inventor Innovation Center",
+            "short_name": "Markaz",
+            "start_url": "/admin/kanban",
+            "display": "standalone",
+            "background_color": "#F4F5FD",
+            "theme_color": "#5B6CF0",
+            "icons": [
+                {
+                    "src": "/app-icon.svg",
+                    "sizes": "any",
+                    "type": "image/svg+xml",
+                    "purpose": "any",
+                }
+            ],
+        }
+    )
+
+
+@app.get("/app-icon.svg")
+def pwa_icon() -> Response:
+    return Response(content=_APP_ICON_SVG, media_type="image/svg+xml")
+
+
+@app.get("/sw.js")
+def pwa_service_worker() -> Response:
+    return Response(content=_SW_JS, media_type="application/javascript")
 
 
 @app.get("/")

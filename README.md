@@ -132,6 +132,13 @@ and soft shadows, a left sidebar navigation, and color-coded statuses
 | **Hisobot** | Monthly report: leads, enrollment, conversion %, source breakdown, course revenue, total revenue & debt, reject reasons — with bar/pie charts and CSV/.xlsx export. |
 | **Shablonlar** | Editable Telegram message templates ({ism}, {kurs}, {summa}...). Sent from a lead's or student's row in one click; every send lands in the comment history. |
 | **Jurnal** | Append-only audit log: who changed what and when (old → new values), filterable by date/actor/entity. Admin only. |
+| **Zaxira** | Daily automatic DB backup at 03:00 (Tashkent) + manual backup & download. Last 14 kept; a failed backup notifies the owner on Telegram. |
+| **Xatolar** | Server (500) error journal with tokens/passwords scrubbed. Admin only. |
+
+The admin panel is a **PWA**: on a phone, "Add to Home Screen" installs it like
+an app; offline shows an "Internet yo'q" notice. Login locks for 15 minutes
+after 5 wrong password attempts; sessions expire after 12 hours. Test leads
+and students can be marked "Test" and purged in one click (real data untouched).
 | **Sozlamalar** | Working hours (Tashkent time), Owner chat ID and the **Telegram reminders toggle** with a "Test xabar yuborish" button. Reminders: group start 1 day before, trial lesson 1 day before, debtors once a week (Mondays) — only inside working hours, once per day, every send logged. |
 | **Xodimlar** | Staff list with logins and roles (role-based visibility comes later). |
 

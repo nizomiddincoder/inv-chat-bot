@@ -47,6 +47,22 @@
 <h1>Lidlar</h1>
 <p class="page-sub">Holat, izoh, mas'ul va qo'ng'iroq sanasi avtomatik saqlanadi.</p>
 
+<div class="card" style="padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+  <span class="hint" style="margin:0">Test belgili lid va talabalar (masalan, sinov paytida kiritilganlar):</span>
+  <button type="button" class="danger small" id="purge-test">Test ma'lumotlarni o'chirish</button>
+</div>
+
+<div class="modal-backdrop" id="purge-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Test ma'lumotlarni o'chirish</h2>
+    <p>Faqat "Test" belgili lid va talabalar o'chiriladi. Haqiqiy ma'lumotlarga tegmaydi. Davom etamizmi?</p>
+    <div class="actions">
+      <button type="button" class="outline" id="purge-cancel">Bekor qilish</button>
+      <button type="button" class="danger" id="purge-confirm">O'chirish</button>
+    </div>
+  </div>
+</div>
+
 <div class="card">
   <h2>Yangi lid (qo'lda kiritish)</h2>
   <form method="post" action="/admin/leads/add" class="add-panel" id="add-form" novalidate>
@@ -117,7 +133,7 @@
   <thead>
     <tr>
       <th>ID</th><th>Ism</th><th>Telefon</th><th>Kurs</th><th>Manba</th>
-      <th>Mas'ul</th><th>Holat</th><th>Sinov darsi</th><th>Keyingi qo'ng'iroq</th><th>Izoh</th>
+      <th>Mas'ul</th><th>Holat</th><th>Sinov darsi</th><th>Keyingi qo'ng'iroq</th><th>Izoh</th><th>Test</th>
     </tr>
   </thead>
   <tbody>
@@ -125,7 +141,7 @@
   {% set overdue = lead.follow_up_at and lead.follow_up_at < today %}
     <tr>
       <td>{{ lead.id }}</td>
-      <td>{{ lead.full_name or '—' }}{% if (lead.repeat_count or 0) > 0 %}<span class="repeat-badge">takroriy</span>{% endif %}</td>
+      <td>{{ lead.full_name or '—' }}{% if (lead.repeat_count or 0) > 0 %}<span class="repeat-badge">takroriy</span>{% endif %}{% if lead.is_test %}<span class="repeat-badge" style="background:var(--mut-bg);color:var(--mut-text)">test</span>{% endif %}</td>
       <td class="nowrap"><a href="tel:{{ lead.phone }}">{{ lead.phone or '—' }}</a></td>
       <td>{{ lead.course or '—' }}</td>
       <td class="source-label">{{ source_label(lead.source) }}</td>
@@ -168,9 +184,14 @@
         <button type="button" class="note-open" data-msg-lead="{{ lead.id }}">Xabar</button>
         <input type="text" class="note-input" placeholder="Izoh qo'shish" data-note-lead="{{ lead.id }}" aria-label="Yangi izoh">
       </td>
+      <td class="nowrap">
+        <label style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:12.5px;font-weight:500;">
+          <input type="checkbox" data-test-lead="{{ lead.id }}" {% if lead.is_test %}checked{% endif %} title="Test belgisi"> Test
+        </label>
+      </td>
     </tr>
   {% else %}
-    <tr><td colspan="10" class="muted">Hozircha lid yo'q.</td></tr>
+    <tr><td colspan="11" class="muted">Hozircha lid yo'q.</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -468,6 +489,31 @@
       if (!data.ok) { showToast(data.error || "Yuborilmadi"); return; }
       msgModal.hidden = true;
       showToast("Xabar yuborildi");
+    }).catch(function () { showToast("Tarmoq xatosi"); });
+  });
+
+  // --- test marker + one-click purge of test data ---
+  document.querySelectorAll("input[data-test-lead]").forEach(function (input) {
+    input.addEventListener("change", function () {
+      post("/admin/leads/" + input.dataset.testLead + "/test", { is_test: input.checked ? "on" : "" })
+        .then(function (r) { return r.json(); })
+        .then(function (data) { showToast(data.ok ? (input.checked ? "Test belgisi qo'yildi" : "Test belgisi olindi") : "Saqlanmadi"); })
+        .catch(function () { showToast("Tarmoq xatosi"); });
+    });
+  });
+
+  var purgeModal = document.getElementById("purge-modal");
+  document.getElementById("purge-test").addEventListener("click", function () {
+    purgeModal.hidden = false;
+  });
+  document.getElementById("purge-cancel").addEventListener("click", function () { purgeModal.hidden = true; });
+  purgeModal.addEventListener("click", function (e) { if (e.target === purgeModal) purgeModal.hidden = true; });
+  document.getElementById("purge-confirm").addEventListener("click", function () {
+    post("/admin/test-data/purge", {}).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok) { showToast(data.error || "O'chirilmadi"); return; }
+      purgeModal.hidden = true;
+      showToast(data.deleted_leads + " lid, " + data.deleted_students + " talaba o'chirildi");
+      setTimeout(function () { location.reload(); }, 900);
     }).catch(function () { showToast("Tarmoq xatosi"); });
   });
 

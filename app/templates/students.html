@@ -58,6 +58,22 @@
 <h1>Talabalar</h1>
 <p class="page-sub">"O'qishga yozildi" holatidagi lidlardan avtomatik yaratiladi. Kartada to'lovlar va qarz.</p>
 
+<div class="card" style="padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+  <span class="hint" style="margin:0">Test belgili lid va talabalar:</span>
+  <button type="button" class="danger small" id="purge-test">Test ma'lumotlarni o'chirish</button>
+</div>
+
+<div class="modal-backdrop" id="purge-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Test ma'lumotlarni o'chirish</h2>
+    <p>Faqat "Test" belgili lid va talabalar o'chiriladi. Haqiqiy ma'lumotlarga tegmaydi. Davom etamizmi?</p>
+    <div class="actions">
+      <button type="button" class="outline" id="purge-cancel">Bekor qilish</button>
+      <button type="button" class="danger" id="purge-confirm">O'chirish</button>
+    </div>
+  </div>
+</div>
+
 <form method="get" action="/admin/students" class="filters" id="filters">
   <input type="text" name="q" value="{{ f_q }}" placeholder="Ism yoki telefon" aria-label="Qidirish">
   <select name="group_id" aria-label="Guruh bo'yicha filtr">
@@ -81,7 +97,7 @@
 <div class="table-wrap">
 <table>
   <thead>
-    <tr><th>ID</th><th>Ism</th><th>Telefon</th><th>Guruh</th><th>Holat</th><th>Chegirma</th><th>Karta</th></tr>
+    <tr><th>ID</th><th>Ism</th><th>Telefon</th><th>Guruh</th><th>Holat</th><th>Chegirma</th><th>Test</th><th>Karta</th></tr>
   </thead>
   <tbody>
   {% for s in students %}
@@ -114,13 +130,18 @@
         <input type="number" class="disc-input" data-f="discount_value" value="{{ s.discount_value or '' }}" placeholder="0" aria-label="Chegirma qiymati">
       </td>
       <td class="nowrap">
+        <label style="display:inline-flex;align-items:center;gap:5px;margin:0;font-size:12.5px;font-weight:500;">
+          <input type="checkbox" data-test="{{ s.id }}" {% if s.is_test %}checked{% endif %} title="Test belgisi"> Test
+        </label>
+      </td>
+      <td class="nowrap">
         <button type="button" class="card-open" data-card="{{ s.id }}">Ochish</button>
         <button type="button" class="note-open" data-notes="{{ s.id }}">Tarix</button>
         <button type="button" class="note-open" data-msg="{{ s.id }}">Xabar</button>
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="7" class="muted">Hozircha talaba yo'q — lidni "O'qishga yozildi" holatiga o'tkazing.</td></tr>
+    <tr><td colspan="8" class="muted">Hozircha talaba yo'q — lidni "O'qishga yozildi" holatiga o'tkazing.</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -387,6 +408,40 @@
       if (!data.ok) { showToast(data.error || "Yuborilmadi"); return; }
       sMsgModal.hidden = true;
       showToast("Xabar yuborildi");
+    }).catch(function () { showToast("Tarmoq xatosi"); });
+  });
+
+  // --- test marker + one-click purge of test data ---
+  document.querySelectorAll("input[data-test]").forEach(function (input) {
+    input.addEventListener("change", function () {
+      var body = new URLSearchParams({ is_test: input.checked ? "on" : "" });
+      fetch("/admin/students/" + input.dataset.test + "/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString()
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        showToast(data.ok ? (input.checked ? "Test belgisi qo'yildi" : "Test belgisi olindi") : "Saqlanmadi");
+      }).catch(function () { showToast("Tarmoq xatosi"); });
+    });
+  });
+
+  var purgeModal = document.getElementById("purge-modal");
+  document.getElementById("purge-test").addEventListener("click", function () {
+    purgeModal.hidden = false;
+  });
+  document.getElementById("purge-cancel").addEventListener("click", function () { purgeModal.hidden = true; });
+  purgeModal.addEventListener("click", function (e) { if (e.target === purgeModal) purgeModal.hidden = true; });
+  document.getElementById("purge-confirm").addEventListener("click", function () {
+    var body = new URLSearchParams({});
+    fetch("/admin/test-data/purge", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok) { showToast(data.error || "O'chirilmadi"); return; }
+      purgeModal.hidden = true;
+      showToast(data.deleted_leads + " lid, " + data.deleted_students + " talaba o'chirildi");
+      setTimeout(function () { location.reload(); }, 900);
     }).catch(function () { showToast("Tarmoq xatosi"); });
   });
 })();

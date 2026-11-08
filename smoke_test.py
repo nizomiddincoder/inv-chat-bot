@@ -943,6 +943,104 @@ with SessionLocal() as s:
     s.query(Course).filter(Course.id == course_r_id).delete(synchronize_session=False)
     s.commit()
 print("stage-4 cleanup OK")
+
+# --- 8h. Stage 5: backups, error journal, login throttle, PWA, test data ---
+from pathlib import Path as _Path  # noqa: E402
+from app import backup as backup_mod  # noqa: E402
+from app.auth import MAX_LOGIN_ATTEMPTS, _failed_logins  # noqa: E402
+from app.models import ErrorLog  # noqa: E402
+
+# 1. backup: manual create -> file exists -> download -> retention 14
+filename, error = backup_mod.create_backup(actor="admin")
+assert error is None and filename and (backup_mod.BACKUP_DIR / filename).is_file()
+r = client.get(f"/admin/backups/download?name={filename}", headers=auth)
+assert r.status_code == 200 and b"courses" in r.content
+# retention: create extra dummy files -> only 14 newest remain
+for i in range(backup_mod.KEEP_BACKUPS + 3):
+    (backup_mod.BACKUP_DIR / f"backup-2026010{i % 10}-00000{i}.json").write_text("{}", encoding="utf-8")
+backup_mod._prune_old_backups()
+files = list(backup_mod.BACKUP_DIR.glob("backup-*.json"))
+assert len(files) == backup_mod.KEEP_BACKUPS, len(files)
+r = client.get("/admin/backups", headers=auth)
+assert r.status_code == 200 and "Zaxira olish" in r.text
+print("backup create/download/retention OK")
+
+# 2. error journal: force a 500 -> sanitized entry in error_log
+client2e = TestClient(app, raise_server_exceptions=False)
+client2e.post("/admin/login", data={"login": "admin", "password": "test-pass"})
+r = client2e.get("/admin/report?month=2026-13", follow_redirects=False)  # invalid month -> crash -> 500
+assert r.status_code == 500, r.status_code
+with SessionLocal() as s:
+    err = s.query(ErrorLog).order_by(ErrorLog.id.desc()).first()
+    assert err is not None and err.path == "/admin/report"
+    assert "test-pass" not in (err.traceback_text or "")
+r = client.get("/admin/errors", headers=auth)
+assert r.status_code == 200 and "/admin/report" in r.text
+print("error journal OK")
+
+# 3. login throttle: 5 wrong attempts -> blocked even with correct password
+_failed_logins.clear()
+r = client3.post("/admin/login", data={"login": "admin", "password": "test-pass"}, follow_redirects=False)
+assert r.status_code == 303  # fresh ip ok
+client3.cookies.clear()
+for i in range(MAX_LOGIN_ATTEMPTS):
+    r = client3.post("/admin/login", data={"login": "admin", "password": f"wrong{i}"})
+    assert r.status_code == 401
+r = client3.post("/admin/login", data={"login": "admin", "password": "test-pass"}, follow_redirects=False)
+assert r.status_code == 429, r.status_code  # blocked despite correct password
+assert "bloklandi" in r.text or "daqiqadan" in r.text
+_failed_logins.clear()
+print("login throttle OK")
+
+# 4. PWA: manifest, icon, service worker
+for url, marker in (
+    ("/manifest.webmanifest", "Markaz"),
+    ("/app-icon.svg", "<svg"),
+    ("/sw.js", "Internet yo'q"),
+):
+    r = client.get(url)
+    assert r.status_code == 200 and marker in r.text, (url, r.status_code)
+r = client.get("/admin/kanban", headers=auth)
+assert 'rel="manifest"' in r.text
+print("PWA manifest/icon/sw OK")
+
+# 5. test data: mark, badge, purge (real rows untouched)
+client.post("/admin/leads/add", data={"full_name": "Haqiqiy Mijoz", "phone": "938880011", "source": "instagram"}, headers=auth, follow_redirects=False)
+client.post("/admin/leads/add", data={"full_name": "Test Mijoz", "phone": "938880022", "source": "instagram"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    real_lead = s.query(Lead).filter(Lead.phone == "+998938880011").one()
+    test_lead = s.query(Lead).filter(Lead.phone == "+998938880022").one()
+    real_id, test_id = real_lead.id, test_lead.id
+r = client.post(f"/admin/leads/{test_id}/test", data={"is_test": "on"}, headers=auth)
+assert r.json()["ok"] is True
+with SessionLocal() as s:
+    assert s.get(Lead, test_id).is_test is True
+    assert s.get(Lead, real_id).is_test is False
+r = client.get("/admin/leads", headers=auth)
+assert ">test<" in r.text
+# mark a test student too (enroll the test lead)
+client.post(f"/admin/leads/{test_id}/status", data={"status": "enrolled"}, headers=auth)
+with SessionLocal() as s:
+    st_t = s.query(Student).filter(Student.lead_id == test_id).one()
+    st_t_id = st_t.id
+client.post(f"/admin/students/{st_t_id}/test", data={"is_test": "on"}, headers=auth)
+# purge: test rows gone, real lead untouched
+r = client.post("/admin/test-data/purge", data={}, headers=auth)
+data_p = r.json()
+assert data_p["ok"] and data_p["deleted_leads"] == 1 and data_p["deleted_students"] == 1
+with SessionLocal() as s:
+    assert s.get(Lead, test_id) is None
+    assert s.get(Student, st_t_id) is None
+    assert s.get(Lead, real_id) is not None
+print("test data marker + purge OK")
+
+# cleanup stage-5 rows
+with SessionLocal() as s:
+    s.query(ErrorLog).delete(synchronize_session=False)
+    s.query(Lead).filter(Lead.id == real_id).delete(synchronize_session=False)
+    s.commit()
+_failed_logins.clear()
+print("stage-5 cleanup OK")
 # settings page renders
 r = client.get("/admin/settings", headers=auth)
 assert r.status_code == 200 and "Owner chat ID" in r.text

@@ -104,6 +104,10 @@ def _migrate_schema() -> None:
         "students": {
             "discount_type": "VARCHAR(10)",
             "discount_value": "INTEGER",
+            "is_test": "BOOLEAN",
+        },
+        "leads": {
+            "is_test": "BOOLEAN",
         },
     }
     with engine.begin() as conn:

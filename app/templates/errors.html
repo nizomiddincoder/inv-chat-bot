@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .err-msg { font-weight: 600; }
+  .err-tb {
+    margin: 6px 0 0; padding: 8px 10px; border-radius: 8px;
+    background: var(--hover); border: 1px solid var(--border);
+    font-size: 11.5px; white-space: pre-wrap; word-break: break-word;
+    max-height: 140px; overflow-y: auto; color: var(--muted);
+    display: none;
+  }
+  .err-open { font-size: 12px; color: var(--primary); background: none; border: none; padding: 0; height: auto; cursor: pointer; font-weight: 600; }
+  .err-open:hover { background: none; text-decoration: underline; }
+</style>
+
+<h1>Xatolar</h1>
+<p class="page-sub">Serverdagi (500) xatolar jurnali — maxfiy ma'lumotlar (token, parol) tozalangan holda. Oxirgi 100 ta.</p>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>Vaqt</th><th>Sahifa</th><th>Xato</th><th>Kim</th><th>Tafsilot</th></tr>
+  </thead>
+  <tbody>
+  {% for e in errors %}
+    <tr>
+      <td class="nowrap">{{ e.created_at | tashkent }}</td>
+      <td class="nowrap">{{ e.method }} {{ e.path }}</td>
+      <td class="err-msg">{{ e.message }}</td>
+      <td>{{ e.user or '—' }}</td>
+      <td>
+        {% if e.traceback_text %}
+        <button type="button" class="err-open" data-tb="{{ loop.index0 }}">Ko'rsatish</button>
+        <pre class="err-tb" id="tb-{{ loop.index0 }}">{{ e.traceback_text }}</pre>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">Xatolar yo'q — hammasi joyida.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<script>
+document.addEventListener("click", function (e) {
+  var btn = e.target.closest(".err-open");
+  if (!btn) return;
+  var pre = document.getElementById("tb-" + btn.dataset.tb);
+  pre.style.display = pre.style.display === "block" ? "none" : "block";
+  btn.textContent = pre.style.display === "block" ? "Yashirish" : "Ko'rsatish";
+});
+</script>
+{% endblock %}

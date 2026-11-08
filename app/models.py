@@ -110,6 +110,8 @@ class Lead(Base):
     trial_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Group chosen when the lead is enrolled (groups.id).
     group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Test data marker: purgeable in one click, never touches real leads.
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False)
     # How many times this person applied again (phone dedup marker).
     repeat_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -151,6 +153,8 @@ class Student(Base):
     # Individual discount on the monthly price: fixed so'm sum or a percent.
     discount_type: Mapped[str | None] = mapped_column(String(10), nullable=True)  # sum | percent
     discount_value: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Test data marker: purgeable in one click, never touches real students.
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False)
     enrolled_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -228,6 +232,20 @@ class AuditLog(Base):
     field: Mapped[str | None] = mapped_column(String(60), nullable=True)
     old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ErrorLog(Base):
+    """Server-side (500) errors with secrets scrubbed, shown in Boshqaruv > Xatolar."""
+
+    __tablename__ = "error_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    method: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    path: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    user: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    traceback_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

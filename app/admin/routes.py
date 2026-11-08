@@ -19,7 +19,12 @@ from ..auth import (
     SESSION_TTL_SECONDS,
     check_credentials,
     create_session,
+    login_block_seconds,
+    register_login_failure,
+    register_login_success,
     verify_session,
+    MAX_LOGIN_ATTEMPTS,
+    _failed_logins,
 )
 from ..config import settings
 from ..database import SessionLocal
@@ -152,15 +157,37 @@ def login_page(request: Request, error: str = ""):
 
 @router.post("/login")
 def do_login(request: Request, login: str = Form(...), password: str = Form(...)):
-    """Validate ADMIN_USER / ADMIN_PASSWORD and set the session cookie."""
-    if not check_credentials(login.strip(), password):
-        log.info("Failed admin login attempt for login=%r", login.strip()[:40])
+    """Validate ADMIN_USER / ADMIN_PASSWORD and set the session cookie.
+
+    5 wrong attempts from one IP block logins for 15 minutes.
+    """
+    ip = request.client.host if request.client else "unknown"
+    blocked = login_block_seconds(ip)
+    if blocked:
+        minutes = max(round(blocked / 60), 1)
+        log.info("Blocked login attempt from %s (%ss left)", ip, blocked)
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"error": "Login yoki parol xato.", "active": ""},
+            {"error": f"Juda ko'p noto'g'ri urinish. Taxminan {minutes} daqiqadan keyin qayta urinib ko'ring.", "active": ""},
+            status_code=429,
+        )
+    if not check_credentials(login.strip(), password):
+        register_login_failure(ip)
+        attempts_left = max(MAX_LOGIN_ATTEMPTS - len(_failed_logins.get(ip, [])), 0)
+        log.info("Failed admin login attempt for login=%r from %s", login.strip()[:40], ip)
+        hint = (
+            f"Login yoki parol xato. Urinishlar qoldi: {attempts_left}."
+            if attempts_left
+            else "Juda ko'p noto'g'ri urinish — 15 daqiqa bloklandi."
+        )
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": hint, "active": ""},
             status_code=401,
         )
+    register_login_success(ip)
     response = RedirectResponse(url="/admin/kanban", status_code=303)
     response.set_cookie(
         SESSION_COOKIE,
@@ -169,7 +196,7 @@ def do_login(request: Request, login: str = Form(...), password: str = Form(...)
         httponly=True,
         samesite="lax",
     )
-    log.info("Admin login: %s", login.strip())
+    log.info("Admin login: %s from %s", login.strip(), ip)
     return response
 
 
@@ -631,6 +658,7 @@ def kanban_page(request: Request, _: str = Depends(check_auth)):
             "trial_date": lead.trial_date.isoformat() if lead.trial_date else "",
             "trial_due": bool(lead.trial_date and lead.trial_date <= today),
             "repeat": (lead.repeat_count or 0) > 0,
+            "test": bool(lead.is_test),
             "reject_reason": REJECT_REASONS.get(lead.reject_reason or ""),
             "updated": _format_tashkent(lead.updated_at),
         }
@@ -1218,6 +1246,167 @@ def export_report_xlsx(month: str = "", _: str = Depends(check_auth)):
     if not month or len(month) != 7 or not month[:4].isdigit():
         month = datetime.now(TZ).strftime("%Y-%m")
     return _xlsx_response(_report_rows(month), f"hisobot-{month}.xlsx")
+
+
+# ---------------------------------------------------------------------------
+# Backups (Boshqaruv > Zaxira) + daily 03:00 automatic copies
+# ---------------------------------------------------------------------------
+
+@router.get("/backups")
+def backups_page(request: Request, _: str = Depends(check_auth)):
+    from ..backup import list_backups
+
+    return templates.TemplateResponse(
+        request,
+        "backups.html",
+        {"backups": list_backups(), "active": "backups"},
+    )
+
+
+@router.post("/backups/create")
+def create_backup_route(user: str = Depends(check_auth)):
+    """Manual backup (the same files the nightly job writes)."""
+    from ..backup import create_backup
+
+    filename, error = create_backup(actor=user)
+    if error:
+        return JSONResponse({"ok": False, "error": f"Zaxira olinmadi: {error}"}, status_code=500)
+    return JSONResponse({"ok": True, "filename": filename})
+
+
+@router.get("/backups/download")
+def download_backup(name: str, _: str = Depends(check_auth)):
+    """Download one backup file (only files inside backups/ are allowed)."""
+    from ..backup import BACKUP_DIR
+    from pathlib import Path
+
+    safe = Path(name).name  # no path traversal
+    path = BACKUP_DIR / safe
+    if not path.is_file() or not safe.startswith("backup-"):
+        raise HTTPException(status_code=404, detail="Zaxira topilmadi")
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={safe}"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Error journal (Boshqaruv > Xatolar) — 500s with secrets scrubbed
+# ---------------------------------------------------------------------------
+
+@router.get("/errors")
+def errors_page(request: Request, user_login: str = Depends(check_auth)):
+    """Server errors (500) recorded by the global error handler."""
+    from ..models import ErrorLog
+
+    if not _is_admin_login(user_login):
+        raise HTTPException(status_code=403, detail="Faqat admin uchun")
+    with SessionLocal() as session:
+        errors = session.query(ErrorLog).order_by(ErrorLog.id.desc()).limit(100).all()
+    return templates.TemplateResponse(
+        request,
+        "errors.html",
+        {"errors": errors, "active": "errors"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test data: "Test" marker on leads/students + one-click purge
+# ---------------------------------------------------------------------------
+
+@router.post("/leads/{lead_id}/test")
+def set_lead_test(
+    lead_id: int,
+    is_test: str = Form(""),
+    user: str = Depends(check_auth),
+):
+    """Mark/unmark a lead as test data."""
+    from ..services import refresh_group_status
+
+    with SessionLocal() as session:
+        lead = session.get(Lead, lead_id)
+        if lead is None:
+            return JSONResponse({"ok": False, "error": "Lid topilmadi"}, status_code=404)
+        lead.is_test = is_test == "on"
+        session.commit()
+    log_audit(user, "lead", lead_id, "ozgartirildi", "test_belgisi", None if is_test != "on" else "yo'q", "ha" if is_test == "on" else "yo'q")
+    log.info("Lead %s is_test -> %s", lead_id, is_test == "on")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/students/{student_id}/test")
+def set_student_test(
+    student_id: int,
+    is_test: str = Form(""),
+    user: str = Depends(check_auth),
+):
+    with SessionLocal() as session:
+        student = session.get(Student, student_id)
+        if student is None:
+            return JSONResponse({"ok": False, "error": "Talaba topilmadi"}, status_code=404)
+        student.is_test = is_test == "on"
+        session.commit()
+    log_audit(user, "student", student_id, "ozgartirildi", "test_belgisi", None if is_test != "on" else "yo'q", "ha" if is_test == "on" else "yo'q")
+    log.info("Student %s is_test -> %s", student_id, is_test == "on")
+    return JSONResponse({"ok": True})
+
+
+@router.post("/test-data/purge")
+def purge_test_data(user: str = Depends(check_auth)):
+    """Delete every test-marked lead and student (with their notes/payments).
+
+    Real data is never touched: only rows with is_test = True are removed.
+    """
+    from ..models import LeadNote
+    from ..services import refresh_group_status
+
+    with SessionLocal() as session:
+        test_students = session.query(Student).filter(Student.is_test.is_(True)).all()
+        test_student_ids = [s.id for s in test_students]
+        affected_groups = {s.group_id for s in test_students if s.group_id}
+
+        test_leads = session.query(Lead).filter(Lead.is_test.is_(True)).all()
+        test_lead_ids = [l.id for l in test_leads]
+
+        deleted_payments = (
+            session.query(Payment)
+            .filter(Payment.student_id.in_(test_student_ids))
+            .delete(synchronize_session=False) if test_student_ids else 0
+        )
+        deleted_student_notes = (
+            session.query(StudentNote)
+            .filter(StudentNote.student_id.in_(test_student_ids))
+            .delete(synchronize_session=False) if test_student_ids else 0
+        )
+        if test_student_ids:
+            session.query(Student).filter(Student.id.in_(test_student_ids)).delete(synchronize_session=False)
+        deleted_lead_notes = (
+            session.query(LeadNote)
+            .filter(LeadNote.lead_id.in_(test_lead_ids))
+            .delete(synchronize_session=False) if test_lead_ids else 0
+        )
+        if test_lead_ids:
+            session.query(Lead).filter(Lead.id.in_(test_lead_ids)).delete(synchronize_session=False)
+        session.commit()
+
+    for gid in affected_groups:
+        refresh_group_status(gid)
+
+    log_audit(user, "lead", 0, "ochirildi", "test_malumotlar", None,
+              f"{len(test_lead_ids)} lid, {len(test_student_ids)} talaba")
+    log.info(
+        "Test data purged: %s leads, %s students (by %s)",
+        len(test_lead_ids), len(test_student_ids), user,
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "deleted_leads": len(test_lead_ids),
+            "deleted_students": len(test_student_ids),
+            "deleted_payments": deleted_payments,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

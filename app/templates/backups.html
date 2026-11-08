@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .bk-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+  .bk-row:first-of-type { border-top: none; }
+  .bk-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bk-meta { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+</style>
+
+<h1>Zaxira nusxa</h1>
+<p class="page-sub">Har kuni soat 03:00 da (Toshkent) avtomatik olinadi. Oxirgi 14 ta nusxa saqlanadi.</p>
+
+<div class="card">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <button type="button" id="bk-create">Zaxira olish</button>
+    <span class="hint" style="margin:0">Nusxa ma'lumotlar bazasining to'liq JSON ko'rinishi. Xatolik bo'lsa Telegram'ga xabar ketadi.</span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Nusxalar (oxirgi {{ backups | length }} ta)</h2>
+  {% for b in backups %}
+  <div class="bk-row">
+    <span class="bk-name">{{ b.name }}</span>
+    <span class="bk-meta">{{ b.created }} · {{ b.size_kb }} KB</span>
+    <span style="margin-left:auto"><a class="btn outline small" href="/admin/backups/download?name={{ b.name }}">Yuklab olish</a></span>
+  </div>
+  {% else %}
+  <div class="muted">Hozircha zaxira yo'q — tugma bilan oling.</div>
+  {% endfor %}
+</div>
+{% endblock %}

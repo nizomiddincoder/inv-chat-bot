@@ -22,7 +22,33 @@ from .config import settings
 log = logging.getLogger("auth")
 
 SESSION_COOKIE = "markaz_session"
-SESSION_TTL_SECONDS = 7 * 24 * 3600  # one week
+SESSION_TTL_SECONDS = 12 * 3600  # 12 hours
+
+# Login throttling: 5 wrong passwords -> 15 minutes block (per IP).
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_BLOCK_SECONDS = 15 * 60
+_failed_logins: dict[str, list[float]] = {}
+
+
+def login_block_seconds(ip: str) -> int:
+    """Seconds left in the block for this IP, 0 if not blocked."""
+    now = time.time()
+    attempts = [t for t in _failed_logins.get(ip, []) if now - t < LOGIN_BLOCK_SECONDS]
+    _failed_logins[ip] = attempts
+    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
+        return int(LOGIN_BLOCK_SECONDS - (now - attempts[-1])) + 1
+    return 0
+
+
+def register_login_failure(ip: str) -> None:
+    now = time.time()
+    attempts = [t for t in _failed_logins.get(ip, []) if now - t < LOGIN_BLOCK_SECONDS]
+    attempts.append(now)
+    _failed_logins[ip] = attempts
+
+
+def register_login_success(ip: str) -> None:
+    _failed_logins.pop(ip, None)
 
 
 def _key() -> bytes:

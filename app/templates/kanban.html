@@ -183,7 +183,7 @@
     <div class="col-body" data-drop="{{ col.status }}">
       {% for c in cards if c.status == col.status %}
       <div class="kcard" draggable="true" data-id="{{ c.id }}" data-status="{{ c.status }}">
-        <div class="name" title="{{ c.full_name }}"><span class="avatar">{{ c.full_name[:2] | upper }}</span><span class="nm">{{ c.full_name }}</span>{% if c.repeat %}<span class="badge warn">takroriy</span>{% endif %}</div>
+        <div class="name" title="{{ c.full_name }}"><span class="avatar">{{ c.full_name[:2] | upper }}</span><span class="nm">{{ c.full_name }}</span>{% if c.repeat %}<span class="badge warn">takroriy</span>{% endif %}{% if c.test %}<span class="badge mut">test</span>{% endif %}</div>
         <div class="meta-row">
           <span class="phone">{{ c.phone }}</span>
           <span class="time">{{ c.updated }}</span>

@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Inventor admin — Markaz</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%235B6CF0'/%3E%3Ctext x='16' y='21.5' font-family='Arial,sans-serif' font-size='15' font-weight='700' fill='white' text-anchor='middle'%3EM%3C/text%3E%3C/svg%3E">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#5B6CF0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Markaz">
+  <link rel="apple-touch-icon" href="/app-icon.svg">
   <script>
     /* Theme before first paint: stored choice wins, else system preference. */
     (function () {
@@ -355,7 +360,7 @@
           <svg class="i" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 14.5h2"/></svg>
           <span class="lbl">Qarzdorlar</span>
         </a>
-        <details class="nav-group" {% if active in ('courses', 'groups', 'teachers', 'employees', 'ai', 'settings', 'report', 'templates', 'audit') %}open{% endif %}>
+        <details class="nav-group" {% if active in ('courses', 'groups', 'teachers', 'employees', 'ai', 'settings', 'report', 'templates', 'audit', 'backups', 'errors') %}open{% endif %}>
           <summary>
             <svg class="i" viewBox="0 0 24 24"><path d="M4 8h10M4 16h7"/><circle cx="18" cy="8" r="2.5"/><circle cx="15" cy="16" r="2.5"/></svg>
             <span class="lbl">Boshqaruv</span>
@@ -388,6 +393,14 @@
             <a href="/admin/templates" class="{{ 'active' if active == 'templates' else '' }}">
               <svg class="i" viewBox="0 0 24 24"><path d="M4 5h16M4 5v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V5M8 9h8M8 13h5"/></svg>
               <span class="lbl">Shablonlar</span>
+            </a>
+            <a href="/admin/backups" class="{{ 'active' if active == 'backups' else '' }}">
+              <svg class="i" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="8" ry="2.8"/><path d="M4 5.5V12c0 1.6 3.6 2.8 8 2.8s8-1.2 8-2.8V5.5M4 12v6.5c0 1.6 3.6 2.8 8 2.8s8-1.2 8-2.8V12"/></svg>
+              <span class="lbl">Zaxira</span>
+            </a>
+            <a href="/admin/errors" class="{{ 'active' if active == 'errors' else '' }}">
+              <svg class="i" viewBox="0 0 24 24"><path d="M12 3 2.5 20h19L12 3z"/><path d="M12 10v4M12 17.2v.3"/></svg>
+              <span class="lbl">Xatolar</span>
             </a>
             <a href="/admin/audit" class="{{ 'active' if active == 'audit' else '' }}">
               <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M9 11h4M11 9v4"/></svg>
@@ -441,6 +454,11 @@
     }
 
     (function () {
+      // --- PWA: register the offline service worker ---
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/sw.js").catch(function () {});
+      }
+
       // --- theme toggle: html.dark + localStorage ("markaz_theme") ---
       function applyTheme(dark) {
         document.documentElement.classList.toggle("dark", dark);
