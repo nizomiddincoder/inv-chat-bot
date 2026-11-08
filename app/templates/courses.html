@@ -1,45 +1,182 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  /* add-form: labels above inputs, all controls on one row, same height */
+  .add-form { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+  .add-form .fld { display: flex; flex-direction: column; gap: 4px; }
+  .add-form .fld label { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .add-form button { align-self: flex-end; }
+  .field-error { color: var(--red); font-size: 12.5px; margin-top: 5px; }
+
+  .c-name { width: 240px; max-width: 100%; }
+  .c-sort { width: 74px; }
+
+  /* confirm modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(30, 34, 53, .45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--surface); border-radius: var(--r-lg);
+    box-shadow: var(--sh-md); padding: 22px 24px;
+    max-width: 420px; width: 100%;
+  }
+  .modal p { margin: 8px 0 18px; color: var(--muted); }
+  .modal .actions { justify-content: flex-end; }
+</style>
+
 <h1>Kurslar</h1>
-<p class="page-sub">Kurslarni qo'shish, tahrirlash — bot tugmalari darhol yangilanadi.</p>
+<p class="page-sub">O'zgarishlar avtomatik saqlanadi — botdagi tugmalar darhol yangilanadi.</p>
 
 <div class="card">
   <h2>Yangi kurs qo'shish</h2>
-  <form method="post" action="/admin/courses/add" class="inline">
-    <input type="text" name="name" placeholder="Kurs nomi" required>
-    <input type="number" name="sort_order" value="0" title="Tartib raqami" style="width:80px">
-    <button>Qo'shish</button>
+  <form method="post" action="/admin/courses/add" class="add-form" id="add-form" novalidate>
+    <div class="fld">
+      <label for="new-name">Kurs nomi</label>
+      <input type="text" name="name" id="new-name" placeholder="Masalan: Frontend dasturlash">
+    </div>
+    <div class="fld">
+      <label for="new-sort">Tartib</label>
+      <input type="number" name="sort_order" id="new-sort" value="0" title="Ro'yxatdagi joyi (kichik raqam — yuqorida)">
+    </div>
+    <button type="submit">Qo'shish</button>
   </form>
-  <p class="hint">Yoqilgan kurslar botdagi tugmalarda darhol paydo bo'ladi. "Tartib" — ro'yxatdagi joyi.</p>
+  <div class="field-error" id="name-error" hidden>Kurs nomini kiriting — bo'sh nom bilan qo'shib bo'lmaydi.</div>
+  <p class="hint">Yoqilgan kurslar botdagi tugmalarda darhol paydo bo'ladi. "Tartib" — ro'yxatdagi joyi (kichik raqam yuqorida turadi).</p>
 </div>
 
 <div class="table-wrap">
 <table>
-  <tr><th>Nomi</th><th>Tartib</th><th>Yoqilgan</th><th>Amallar</th></tr>
+  <thead>
+    <tr><th>Nomi</th><th>Tartib</th><th>Yoqilgan</th><th>Amallar</th></tr>
+  </thead>
+  <tbody id="course-rows">
   {% for course in courses %}
-  <tr>
-    <td>
-      <form method="post" action="/admin/courses/{{ course.id }}/update" class="inline">
-        <input type="text" name="name" value="{{ course.name }}" size="24">
-    </td>
-    <td>
-        <input type="number" name="sort_order" value="{{ course.sort_order }}" style="width:70px">
-    </td>
-    <td>
-        <input type="checkbox" name="is_enabled" {{ 'checked' if course.is_enabled else '' }}>
-    </td>
-    <td>
-        <button class="small">Saqlash</button>
-      </form>
-      <form method="post" action="/admin/courses/{{ course.id }}/delete" class="inline"
-            onsubmit="return confirm('Haqiqatan ham olib tashlansinmi?');">
-        <button class="small danger">O'chirish</button>
-      </form>
-    </td>
-  </tr>
+    <tr data-id="{{ course.id }}">
+      <td><input type="text" class="c-name" value="{{ course.name }}" data-orig="{{ course.name }}" aria-label="Kurs nomi"></td>
+      <td><input type="number" class="c-sort" value="{{ course.sort_order }}" data-orig="{{ course.sort_order }}" aria-label="Tartib"></td>
+      <td><input type="checkbox" class="c-en" {% if course.is_enabled %}checked{% endif %} aria-label="Yoqilgan"></td>
+      <td class="nowrap">
+        <div class="actions">
+          <button type="button" class="danger small c-del">O'chirish</button>
+        </div>
+      </td>
+    </tr>
   {% else %}
-  <tr><td colspan="4" class="muted">Hozircha kurs yo'q.</td></tr>
+    <tr><td colspan="4" class="muted">Hozircha kurs yo'q.</td></tr>
   {% endfor %}
+  </tbody>
 </table>
 </div>
+
+<!-- delete confirmation -->
+<div class="modal-backdrop" id="del-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="del-title">
+    <h2 id="del-title">Kursni o'chirish</h2>
+    <p>Rostdan o'chirilsinmi? Bu kursga bog'liq botdagi tugma ham o'chadi.</p>
+    <div class="actions">
+      <button type="button" class="outline" id="del-cancel">Bekor qilish</button>
+      <button type="button" class="danger" id="del-confirm">O'chirish</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var tbody = document.getElementById("course-rows");
+
+  // --- auto-save a row (500ms debounce), then re-sort by "Tartib" ---
+  var timers = {};
+  function saveRow(row) {
+    var id = row.dataset.id;
+    var name = row.querySelector(".c-name").value.trim();
+    var sort = row.querySelector(".c-sort").value || "0";
+    var en = row.querySelector(".c-en").checked;
+    var body = new URLSearchParams({
+      name: name, sort_order: sort,
+      is_enabled: en ? "on" : ""
+    });
+    fetch("/admin/courses/" + id + "/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) {
+      if (!r.ok) { showToast("❌ Saqlanmadi"); return; }
+      row.querySelectorAll("[data-orig]").forEach(function (el) { el.dataset.orig = el.value; });
+      showToast("Saqlandi ✅");
+      sortRows();
+    }).catch(function () { showToast("❌ Tarmoq xatosi"); });
+  }
+
+  function sortRows() {
+    var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr[data-id]"));
+    rows.sort(function (a, b) {
+      return (parseInt(a.querySelector(".c-sort").value, 10) || 0)
+           - (parseInt(b.querySelector(".c-sort").value, 10) || 0);
+    });
+    rows.forEach(function (r) { tbody.appendChild(r); });
+  }
+
+  tbody.addEventListener("change", function (e) {
+    var row = e.target.closest("tr[data-id]");
+    if (!row) return;
+    var field = e.target;
+    if (field.classList.contains("c-name") && !field.value.trim()) {
+      showToast("❌ Kurs nomi bo'sh bo'lishi mumkin emas");
+      field.value = field.dataset.orig;
+      return;
+    }
+    clearTimeout(timers[row.dataset.id]);
+    timers[row.dataset.id] = setTimeout(function () { saveRow(row); }, 500);
+  });
+
+  // --- delete: custom confirm modal, then fetch + remove row ---
+  var modal = document.getElementById("del-modal");
+  var pendingRow = null;
+
+  tbody.addEventListener("click", function (e) {
+    var btn = e.target.closest(".c-del");
+    if (!btn) return;
+    pendingRow = btn.closest("tr[data-id]");
+    var name = pendingRow.querySelector(".c-name").value;
+    modal.querySelector("p").textContent =
+      'Rostdan o\'chirilsinmi? "' + name + '" kursiga bog\'liq botdagi tugma ham o\'chadi.';
+    modal.hidden = false;
+  });
+
+  function closeModal() { modal.hidden = true; pendingRow = null; }
+  document.getElementById("del-cancel").addEventListener("click", closeModal);
+  modal.addEventListener("click", function (e) { if (e.target === modal) closeModal(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
+
+  document.getElementById("del-confirm").addEventListener("click", function () {
+    if (!pendingRow) return;
+    var row = pendingRow;
+    fetch("/admin/courses/" + row.dataset.id + "/delete", { method: "POST" })
+      .then(function (r) {
+        if (!r.ok) { showToast("❌ O'chirilmadi"); closeModal(); return; }
+        row.remove();
+        closeModal();
+        showToast("Kurs o'chirildi ✅");
+      })
+      .catch(function () { showToast("❌ Tarmoq xatosi"); closeModal(); });
+  });
+
+  // --- add course: empty name -> inline error, no submit ---
+  var addForm = document.getElementById("add-form");
+  var nameInput = document.getElementById("new-name");
+  var nameError = document.getElementById("name-error");
+  nameInput.addEventListener("input", function () { nameError.hidden = true; });
+  addForm.addEventListener("submit", function (e) {
+    if (!nameInput.value.trim()) {
+      e.preventDefault();
+      nameError.hidden = false;
+      nameInput.focus();
+    }
+  });
+})();
+</script>
 {% endblock %}

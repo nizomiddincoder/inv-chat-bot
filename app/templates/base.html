@@ -108,23 +108,36 @@
       font-family: inherit; font-size: 14px;
       border: 1px solid var(--border); border-radius: var(--r-sm);
       background: var(--surface); color: var(--text);
-      padding: 8px 11px;
+      padding: 0 11px; height: 36px;
     }
+    input[type="checkbox"] { height: auto; width: 16px; accent-color: var(--primary); }
     input:focus, select:focus, textarea:focus {
       outline: 2px solid var(--primary-2); outline-offset: 0; border-color: var(--primary);
     }
-    textarea { width: 100%; min-height: 90px; resize: vertical; }
-    button {
+    textarea { width: 100%; min-height: 90px; resize: vertical; padding: 9px 11px; height: auto; }
+
+    /* ============ Buttons: one system on every page ============ */
+    /* primary (blue) = default | .danger (red) = destructive | .outline = secondary */
+    button, .btn {
       background: var(--primary); color: #fff; border: none;
       font-weight: 600; cursor: pointer;
-      padding: 8px 16px; border-radius: var(--r-sm);
+      height: 36px; padding: 0 16px; border-radius: var(--r-sm);
+      display: inline-flex; align-items: center; justify-content: center;
+      white-space: nowrap; text-decoration: none; font-size: 14px;
     }
-    button:hover { background: var(--primary-deep); }
-    button.small { padding: 5px 12px; font-size: 13px; }
+    button:hover, .btn:hover { background: var(--primary-deep); }
     button.danger { background: var(--red); }
     button.danger:hover { background: #DC2626; }
+    button.outline, .btn.outline {
+      background: var(--surface); color: var(--primary);
+      border: 1px solid var(--primary-2);
+    }
+    button.outline:hover, .btn.outline:hover { background: var(--tint); }
+    button.small { padding: 0 12px; font-size: 13px; }
 
-    form.inline { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    /* horizontal button groups: never stack, min 8px apart */
+    .actions { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    form.inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .filters {
       display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
       background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-sm);
@@ -136,14 +149,15 @@
       background: var(--surface); border-radius: var(--r-lg);
       box-shadow: var(--sh-sm); overflow-x: auto; padding: 6px 6px 2px;
     }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 720px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 880px; }
     th {
       text-align: left; white-space: nowrap;
       font-size: 11px; font-weight: 500; letter-spacing: .4px; text-transform: uppercase;
-      color: var(--faint); padding: 12px 12px 8px;
+      color: var(--faint); padding: 12px 9px 8px;
     }
-    td { padding: 11px 12px; border-top: 1px solid var(--border); vertical-align: middle; }
+    td { padding: 11px 9px; border-top: 1px solid var(--border); vertical-align: middle; overflow-wrap: break-word; word-break: normal; }
     tr:hover td { background: #FAFBFE; }
+    .nowrap { white-space: nowrap; }
     td a { color: var(--primary); text-decoration: none; font-weight: 500; }
     td a:hover { text-decoration: underline; }
 
@@ -201,5 +215,26 @@
       {% block content %}{% endblock %}
     </main>
   </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <style>
+    #toast {
+      position: fixed; bottom: 18px; right: 18px; z-index: 60;
+      background: var(--primary); color: #fff;
+      padding: 11px 18px; border-radius: var(--r-md);
+      font-size: 14px; font-weight: 500; box-shadow: var(--sh-md);
+      opacity: 0; transition: opacity .25s; pointer-events: none;
+    }
+    #toast.show { opacity: 1; }
+  </style>
+  <script>
+    function showToast(msg) {
+      var t = document.getElementById("toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      clearTimeout(t._hideTimer);
+      t._hideTimer = setTimeout(function () { t.classList.remove("show"); }, 2000);
+    }
+  </script>
 </body>
 </html>
