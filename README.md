@@ -27,7 +27,7 @@ inv-chat-bot/
 │   ├── crm.py               # CRM adapter (TODO: connect external CRM here)
 │   ├── followup.py          # 24-hour follow-up reminders to the owner
 │   ├── admin/
-│   │   └── routes.py        # admin panel pages (/admin)
+│   │   └── routes.py        # admin panel pages (/admin, incl. AI Javoblar)
 │   └── templates/           # admin panel HTML (Uzbek)
 ├── knowledge/               # knowledge files for Claude (.md / .txt) — edit freely
 ├── smoke_test.py            # local test: simulates a full chat + admin check
@@ -118,7 +118,7 @@ Open `https://YOUR-RAILWAY-URL/admin` and log in with `ADMIN_USER` / `ADMIN_PASS
 |------|--------------|
 | **Lidlar** | All leads. Filter by course/status, search by name or phone, change status, add notes, download CSV (opens in Excel). |
 | **Kurslar** | Add / edit / delete / enable / disable courses. Changes the bot's buttons **immediately**. |
-| **Xabarlar** | Edit every bot text (welcome, after course, after name, wrong phone, finish, out-of-hours). Use `{first_name}` and `{course}` placeholders. |
+| **AI Javoblar** | Tune Claude's answer style (professional prompt) + extra knowledge + a **sandbox test window** to preview answers without sending anything. See the section below. |
 | **Sozlamalar** | Working hours (e.g. 09:00–20:00, Tashkent time) and Owner chat ID. |
 
 Outside working hours the bot adds: *"Hozir ish vaqtimiz tugagan, ertaga javob beramiz."*
@@ -157,6 +157,13 @@ With `ANTHROPIC_API_KEY` set, **every business message is answered by Claude**
   put into the system prompt. Edit the files (or add new ones) at any time;
   the bot re-reads them on every message, **no redeploy needed**. Start with
   `knowledge/markaz-haqida.md` and replace the `[TO'LDIRING]` placeholders.
+- **Answer style** is tuned in the admin panel → **AI Javoblar** page: an
+  editable professional style prompt (tone, length, formality, forbidden
+  phrases) plus an "extra knowledge" box for quick facts. Clearing the style
+  box restores the built-in professional preset. The lead-collection rules
+  (`[LEAD]` marker) are fixed in code and can never be broken by editing.
+- **Sandbox test window** (same page): type a customer message, see Claude's
+  answer and the detected lead — nothing is sent to any real chat.
 - Claude sees the last 16 messages of the chat, so it answers in context.
 - When Claude has collected a visitor's **name + phone**, it appends an internal
   `[LEAD] ... [/LEAD]` marker: the bot strips it from the reply, saves the lead
@@ -206,7 +213,7 @@ depends on `OWNER_CHAT_ID`.
 8. ✅ Lead appears in `/admin/leads` with the correct course, name and phone.
 9. ✅ Ask the same friend to go through the flow again → **no duplicate lead**, the existing row is updated.
 10. ✅ In **Kurslar** disable a course → the friend sends "bekor qilish" → the disabled course no longer shows as a button.
-11. ✅ Change a text in **Xabarlar** → the friend sends "bekor qilish" → the new text arrives.
+11. ✅ In **AI Javoblar** change the style prompt → use the sandbox test window to preview the new answer style.
 12. ✅ Export CSV from the Lidlar page and open it in Excel — Uzbek letters look correct.
 
 ## Local testing (optional, for a developer)

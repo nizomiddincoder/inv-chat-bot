@@ -11,6 +11,7 @@ from .config import settings
 from .crm import push_lead
 from .database import SessionLocal
 from .models import (
+    AiSetting,
     BotMessage,
     ChatState,
     ChatHistory,
@@ -186,6 +187,35 @@ def clear_history(chat_id: int) -> None:
         session.query(ChatHistory).filter(ChatHistory.chat_id == chat_id).delete(
             synchronize_session=False
         )
+        session.commit()
+
+
+# ---------------------------------------------------------------------------
+# AI settings (admin panel -> AI Javoblar page)
+# ---------------------------------------------------------------------------
+
+AI_STYLE_KEY = "style_prompt"        # how Claude writes its answers
+AI_KNOWLEDGE_KEY = "extra_knowledge"  # extra facts appended to knowledge/ files
+
+
+def get_ai_text(key: str) -> str | None:
+    """Read a long AI setting text (style prompt, extra knowledge) or None."""
+    with SessionLocal() as session:
+        row = session.get(AiSetting, key)
+        if row is not None and row.text:
+            return row.text
+    return None
+
+
+def set_ai_text(key: str, text: str) -> None:
+    """Save a long AI setting text (empty string = fall back to the default)."""
+    with SessionLocal() as session:
+        row = session.get(AiSetting, key)
+        if row is None:
+            session.add(AiSetting(key=key, text=text))
+        else:
+            row.text = text
+            row.updated_at = utcnow()
         session.commit()
 
 

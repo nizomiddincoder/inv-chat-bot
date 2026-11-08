@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 
 from .config import settings
+from .services import AI_KNOWLEDGE_KEY, AI_STYLE_KEY, get_ai_text
 
 log = logging.getLogger("bot.claude")
 
@@ -40,6 +41,27 @@ LEAD_RE = re.compile(
 def is_enabled() -> bool:
     """True when Claude answers are possible (API key configured)."""
     return bool(settings.ANTHROPIC_API_KEY)
+
+
+# Professional answer style used until the owner saves their own version in
+# the admin panel (AI Javoblar page). Empty DB value -> this default.
+DEFAULT_STYLE_PROMPT = (
+    "Uslub — professional ta'lim markazi konsultanti:\n"
+    "- Mijozga hurmat bilan, doim \"siz\" deb murojaat qilasan; toning — ishonchli, "
+    "iliq va rasmiy.\n"
+    "- Javob tuzilgan holda: avval savolga to'g'ridan-to'g'ri aniq javob, so'ng 1-2 "
+    "qatorda muhim tafsilot (davomiylik, narx, jadval — faqat bilimlarda bor bo'lsa).\n"
+    "- Qisqa yozasan: odatda 3-5 qator; ortiqcha so'z, takror va ortiqcha emoji "
+    "ishlatmaysan (eng ko'pi 1 ta emoji yoki umuman yo'q).\n"
+    "- Adabiy, ravon o'zbek tilida yozasan: tinish belgilari to'g'ri, ortiqcha chet "
+    "so'zlarisiz.\n"
+    "- Bilmaganingda taxmin qilmaysan: \"bu bo'yicha mutaxassislarimiz aniq ma'lumot "
+    "beradi\" deysan va aloqada qolishni taklif qilasan.\n"
+    "- Mijoz qiziqsa, suhbatni professional yakunlaysan: ism va telefon so'raysan, "
+    "\"o'qishga yozilish bo'yicha mutaxassislarimiz siz bilan bog'lanadi\" deysan.\n"
+    "- Bosim o'tkazmaysan va bo'sh va'da bermaysan (\"100% kafolat\", \"eng arzon\" "
+    "kabi iboralar taqiqlangan)."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -84,41 +106,47 @@ def knowledge_file_count() -> int:
 
 
 def build_system_prompt() -> str:
-    """System prompt: role rules + the full content of knowledge/ files."""
+    """System prompt: role + knowledge (files + admin extra) + answer style.
+
+    The style block comes from the admin panel (AI Javoblar page) and decides
+    how professional the answers sound. The [LEAD] rules are fixed in code so
+    lead collection can never break by editing the panel.
+    """
     docs = load_knowledge()
-    if docs:
-        knowledge = "\n\n".join(f"### {name}\n{content}" for name, content in docs)
+    extra = (get_ai_text(AI_KNOWLEDGE_KEY) or "").strip()
+    knowledge_blocks = [f"### {name}\n{content}" for name, content in docs if content]
+    if extra:
+        knowledge_blocks.append(f"### Qo'shimcha ma'lumot (admin paneldan)\n{extra}")
+    if knowledge_blocks:
+        knowledge = "\n\n".join(knowledge_blocks)
         knowledge_note = (
-            "Quyidagi bilim fayllaridagi ma'lumotga asoslanib javob ber "
+            "Quyidagi bilimlarga asoslanib javob ber "
             "(bu — markazning rasmiy ma'lumotlari):"
         )
     else:
         knowledge = "(bilim fayllari topilmadi)"
         knowledge_note = (
-            "Bilim fayllari bo'sh — aniq ma'lumot bermaysan, umumiy javob ber"
+            "Bilim fayllari bo'sh — aniq raqam/narx aytmaysan, umumiy javob ber"
         )
+
+    style = (get_ai_text(AI_STYLE_KEY) or "").strip() or DEFAULT_STYLE_PROMPT
     return (
         "Sen \"Inventor Innovation Center\" (O'zbekistondagi ta'lim markazi) "
         "Telegram Business chatining yordamchisisan. Mijozlar bilan o'zbek "
-        "tilida (lotin alifbosida), do'stona va qisqa muloqot qilasan.\n\n"
+        "tilida (lotin alifbosida) muloqot qilasan.\n\n"
         f"{knowledge_note}\n\n{knowledge}\n\n"
-        "Qoidalar:\n"
-        "1. Javoblar qisqa bo'lsin (odatda 2-6 qator), Telegram chatga mos.\n"
-        "2. Faqat yuqoridagi bilimlarda bor ma'lumotni ayt. Bilmaganingni "
-        "o'ylab topma — \"buni aniq ayta olmayman, admin tez orada "
-        "bog'lanadi\" deb yoz.\n"
-        "3. Mijoz kursga yozilmoqchi bo'lsa yoki narx/jadval so'rasa, uning "
-        "ISMI va TELEFON raqamini so'ra (avval ism, keyin telefon). Telefonni "
+        f"Javob uslubi (muhim — shu qoidalarga qat'iy amal qil):\n{style}\n\n"
+        "Lid yig'ish qoidalari (o'zgarmas):\n"
+        "1. Mijoz kursga yozilmoqchi bo'lsa yoki narx/jadval so'rasa, uning ISMI "
+        "va TELEFON raqamini so'ra (avval ism, keyin telefon). Telefonni "
         "+998XXXXXXXXX, 998XXXXXXXXX yoki 9XXXXXXXX ko'rinishida qabul qil.\n"
-        "4. Ism VA telefon to'liq bo'lgach, javobing oxiriga aynan shu "
-        "ko'rinishda belgi qo'sh (bu belgini bot o'qiydi, mijoz ko'rmaydi — "
-        "uni hech qachon boshqa maqsadda ishlatma):\n"
+        "2. Ism VA telefon to'liq bo'lgach, javobing oxiriga aynan shu ko'rinishda "
+        "belgi qo'sh (bu belgini bot o'qiydi, mijoz ko'rmaydi — uni hech qachon "
+        "boshqa maqsadda ishlatma):\n"
         "[LEAD] Ism Familiya | +998XXXXXXXXX | Kurs nomi [/LEAD]\n"
-        "5. Kurs nomini bilimlardagi ro'yxatdan aynan tanlashga harakat qil.\n"
-        "6. O'zingni AI model (Claude va h.k.) deb tanishtirma — sen markazning "
-        "yordamchisisan.\n"
-        "7. Salomlashish yoki umumiy savollarga tabiiy, qisqa javob ber; "
-        "kerak bo'lsa kurslar ro'yxatini qisqacha taklif qil."
+        "3. Kurs nomini bilimlardagi ro'yxatdan aynan tanlashga harakat qil.\n"
+        "4. O'zingni AI model (Claude va h.k.) deb tanishtirma — sen markazning "
+        "yordamchisisan."
     )
 
 

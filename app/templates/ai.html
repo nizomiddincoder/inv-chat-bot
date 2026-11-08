@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>AI javoblar (Claude)</h1>
+
+{% if not claude_enabled %}
+<div class="flash" style="background:#fff4e5;border-color:#e8a748;color:#7a4d05">
+  ⚠️ <b>ANTHROPIC_API_KEY sozlanmagan</b> — hozir Claude o'chirilgan, bot eski tugmali oqim bilan ishlaydi.
+  Quyidagi sozlamalar kalit qo'shilgach kuchga kiradi.
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>1. Javob uslubi — professional ko'rsatmalar</h2>
+  <p class="hint">
+    Claude mijozlarga aynan shu ko'rsatmalar bo'yicha javob beradi. Matnni o'zgartirib, javoblarni
+    yanada professional qilishingiz mumkin (ton, uzunlik, rasmiylik, taqiqlar).
+    To'liq o'chirsangiz — standart professional namuna qaytadi.
+  </p>
+  <form method="post" action="/admin/ai">
+    <label>Stil ko'rsatmalari (prompt)</label>
+    <textarea name="style_prompt" rows="12">{{ style_prompt }}</textarea>
+
+    <label>Qo'shimcha bilimlar (ixtiyoriy)</label>
+    <p class="hint">
+      knowledge/ papkasidagi fayllarga qo'shimcha matn: yangi narxlar, guruhlar, chegirmalar...
+      Bilimlar oxiriga qo'shiladi. (Panelda yozilgan matn qayta deploy qilinsa ham yo'qolmaydi.)
+    </p>
+    <textarea name="extra_knowledge" rows="5" placeholder="Masalan: Kompyuter savodxonlik — 1 oy, 500 000 so'm, yangi guruh 1-dekabrdan boshlanadi.">{{ extra_knowledge }}</textarea>
+
+    <div style="margin-top:8px"><button>Saqlash</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>2. Sinov oynasi</h2>
+  <p class="hint">
+    Mijoz xabarini yozib, Claude'ning <b>saqlangan</b> sozlamalar bo'yicha qanday javob berishini
+    ko'ring. Xabar hech kimga yuborilmaydi — javob faqat shu sahifada ko'rsatiladi.
+  </p>
+  <form method="post" action="/admin/ai/test">
+    <label>Mijoz xabari</label>
+    <textarea name="message" rows="2" required placeholder="Masalan: Assalomu alaykum, trading kursi qancha turadi?">{{ test_message }}</textarea>
+    <div style="margin-top:8px"><button>Sinash</button></div>
+  </form>
+
+  {% if test_error %}<p style="color:#c0392b">⚠️ {{ test_error }}</p>{% endif %}
+  {% if test_reply is not none %}
+    <label>Claude javobi (mijoz ko'radigan ko'rinishda):</label>
+    <div class="card" style="background:#f8fafc;margin-bottom:8px">
+      <pre style="white-space:pre-wrap;font-family:inherit;margin:0;font-size:14px">{{ test_reply }}</pre>
+    </div>
+    {% if test_lead %}<p class="muted">🧲 Lid aniqlandi: {{ test_lead }}</p>{% endif %}
+  {% endif %}
+</div>
+
+<p class="muted">
+  Model: <code>{{ model }}</code> &nbsp;|&nbsp; Bilim fayllari (<code>knowledge/</code>):
+  {% if knowledge_files %}
+    {% for f in knowledge_files %}<code>{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+  {% else %}topilmadi{% endif %}
+</p>
+{% endblock %}

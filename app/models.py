@@ -117,3 +117,17 @@ class ChatHistory(Base):
     role: Mapped[str] = mapped_column(String(16))
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AiSetting(Base):
+    """Editable AI settings (admin panel -> AI Javoblar page).
+
+    Long texts (Claude style prompt, extra knowledge) that don't fit the
+    200-char Setting.value column.
+    """
+
+    __tablename__ = "ai_settings"
+
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

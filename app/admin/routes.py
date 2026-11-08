@@ -13,14 +13,18 @@ from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from .. import claude_client
 from ..config import settings
 from ..database import SessionLocal
-from ..models import BotMessage, Course, Lead
+from ..models import Course, Lead
 from ..services import (
-    DEFAULT_MESSAGES,
+    AI_KNOWLEDGE_KEY,
+    AI_STYLE_KEY,
     TZ,
+    get_ai_text,
     get_setting,
     get_work_hours,
+    set_ai_text,
     set_setting,
 )
 
@@ -48,17 +52,6 @@ STATUS_LABELS = {
     "contacted": "Aloqaga chiqildi",
     "enrolled": "O'qishga yozildi",
     "rejected": "Rad etildi",
-}
-
-MESSAGE_LABELS = {
-    "welcome": "1. Salomlashish (birinchi javob) — {first_name} ishlatiladi",
-    "after_course": "2. Kurs tanlangandan keyin — {first_name}, {course} ishlatiladi",
-    "after_name": "3. Ism qabul qilingandan keyin (telefon so'raladi)",
-    "after_phone": "4. Telefon noto'g'ri kiritilsa",
-    "name_invalid": "5. Ism noto'g'ri kiritilsa",
-    "name_edited": "6. Ism tahrirlangandagi tasdiq (xabar o'zgartirilsa)",
-    "finish": "7. Yakuniy xabar (lid qabul qilindi) — {first_name} ishlatiladi",
-    "out_of_hours": "8. Ish vaqtidan tashqari qo'shiladigan satr",
 }
 
 
@@ -264,43 +257,97 @@ def delete_course(course_id: int, _: None = Depends(check_auth)):
 
 
 # ---------------------------------------------------------------------------
-# Messages (bot text templates)
+# AI answers (Claude): style prompt, extra knowledge, sandbox test window
 # ---------------------------------------------------------------------------
 
-@router.get("/messages")
-def messages_page(request: Request, saved: int = 0, _: None = Depends(check_auth)):
-    with SessionLocal() as session:
-        rows = {m.key: m.text for m in session.query(BotMessage).all()}
-    # Show every known template even if it is missing from the DB.
-    messages = [
-        {"key": key, "label": MESSAGE_LABELS.get(key, key), "text": rows.get(key, DEFAULT_MESSAGES.get(key, ""))}
-        for key in DEFAULT_MESSAGES
-    ]
+AI_TEXT_LIMIT = 8000  # safety cap for the textareas
+
+
+def _ai_page_context(
+    saved: int = 0,
+    test_message: str = "",
+    test_reply: str | None = None,
+    test_lead: str | None = None,
+    test_error: str | None = None,
+) -> dict:
+    """Template context for the AI Javoblar page (GET and test POST)."""
+    return {
+        "style_prompt": get_ai_text(AI_STYLE_KEY) or claude_client.DEFAULT_STYLE_PROMPT,
+        "extra_knowledge": get_ai_text(AI_KNOWLEDGE_KEY) or "",
+        "knowledge_files": [name for name, _ in claude_client.load_knowledge()],
+        "claude_enabled": claude_client.is_enabled(),
+        "model": settings.CLAUDE_MODEL,
+        "test_message": test_message,
+        "test_reply": test_reply,
+        "test_lead": test_lead,
+        "test_error": test_error,
+        "saved": saved,
+        "active": "ai",
+    }
+
+
+@router.get("/ai")
+def ai_page(request: Request, saved: int = 0, _: None = Depends(check_auth)):
     return templates.TemplateResponse(
-        request,
-        "messages.html",
-        {"messages": messages, "saved": saved, "active": "messages"},
+        request, "ai.html", _ai_page_context(saved=saved)
     )
 
 
-@router.post("/messages/{key}")
-def update_message(key: str, text: str = Form(...), _: None = Depends(check_auth)):
-    if key not in DEFAULT_MESSAGES:
-        raise HTTPException(status_code=400, detail="Unknown message key")
-    with SessionLocal() as session:
-        row = session.get(BotMessage, key)
-        if row is None:
-            session.add(BotMessage(key=key, text=text))
+@router.post("/ai")
+def save_ai(
+    style_prompt: str = Form(...),
+    extra_knowledge: str = Form(""),
+    _: None = Depends(check_auth),
+):
+    # Empty style -> the code default (professional preset) is used again.
+    set_ai_text(AI_STYLE_KEY, style_prompt.strip()[:AI_TEXT_LIMIT])
+    set_ai_text(AI_KNOWLEDGE_KEY, extra_knowledge.strip()[:AI_TEXT_LIMIT])
+    log.info("AI settings saved: style=%d chars, extra knowledge=%d chars",
+             len(style_prompt), len(extra_knowledge))
+    return RedirectResponse(url="/admin/ai?saved=1", status_code=303)
+
+
+@router.post("/ai/test")
+def test_ai(request: Request, message: str = Form(...), _: None = Depends(check_auth)):
+    """Sandbox: run one visitor message through Claude with the SAVED settings.
+
+    Nothing is sent to any chat — the reply is only shown on this page.
+    """
+    message = message.strip()
+    test_reply: str | None = None
+    test_lead: str | None = None
+    test_error: str | None = None
+
+    if not claude_client.is_enabled():
+        test_error = (
+            "ANTHROPIC_API_KEY sozlanmagan — sinov mumkin emas. Kalit "
+            "(Railway → Variables) qo'shilgach, bu oyna ishlaydi."
+        )
+    elif message:
+        reply = claude_client.generate_reply([{"role": "user", "text": message}])
+        if reply is None:
+            test_error = (
+                "Claude javob bermadi (API xatosi — Railway loglaridagi "
+                "'Claude API' yozuvlarini tekshiring)."
+            )
         else:
-            row.text = text
-        session.commit()
-    log.info("Message template updated: %s", key)
-    return RedirectResponse(url="/admin/messages?saved=1", status_code=303)
+            visible, name, phone, course = claude_client.extract_lead(reply)
+            test_reply = visible or "(javob faqat lid belgisidan iborat bo'ldi)"
+            if phone:
+                test_lead = f"{name or '—'} | {phone} | {course or '—'}"
+    else:
+        test_error = "Xabar matni bo'sh."
 
-
-# ---------------------------------------------------------------------------
-# Settings
-# ---------------------------------------------------------------------------
+    return templates.TemplateResponse(
+        request,
+        "ai.html",
+        _ai_page_context(
+            test_message=message,
+            test_reply=test_reply,
+            test_lead=test_lead,
+            test_error=test_error,
+        ),
+    )
 
 @router.get("/settings")
 def settings_page(request: Request, saved: int = 0, _: None = Depends(check_auth)):

@@ -302,9 +302,44 @@ assert "Lidlar" in r.text
 # courses page renders
 r = client.get("/admin/courses", headers=auth)
 assert r.status_code == 200 and "Kurslar" in r.text
-# messages page renders all 8 templates
-r = client.get("/admin/messages", headers=auth)
-assert r.status_code == 200 and r.text.count("<textarea") == 8
+# old messages page is gone, replaced by the AI page
+r = client.get("/admin/messages", headers=auth, follow_redirects=False)
+assert r.status_code == 404, r.status_code
+print("messages page removed OK")
+# reset saved AI texts so the default professional preset is shown (re-run safe)
+from app.models import AiSetting  # noqa: E402
+with SessionLocal() as s:
+    s.query(AiSetting).delete(synchronize_session=False)
+    s.commit()
+# AI page renders: style prompt + extra knowledge + sandbox test window
+r = client.get("/admin/ai", headers=auth)
+assert r.status_code == 200, r.status_code
+assert "Javob uslubi" in r.text and "Sinov oynasi" in r.text, r.text[:400]
+assert "professional" in r.text  # default professional style preset is shown
+# saving the style prompt + extra knowledge reaches the Claude system prompt
+r = client.post(
+    "/admin/ai",
+    data={"style_prompt": "Har doim juda rasmiy va qisqa javob bering.",
+          "extra_knowledge": "Sinov narxi: 1 so'm."},
+    headers=auth, follow_redirects=False,
+)
+assert r.status_code == 303, r.status_code
+prompt = claude_client.build_system_prompt()
+assert "juda rasmiy" in prompt, prompt
+assert "Sinov narxi: 1 so'm" in prompt, prompt
+assert "[LEAD]" in prompt, prompt  # fixed lead rules can never be edited away
+print("AI page + style/extra knowledge in system prompt OK")
+# sandbox test window: reply shown, [LEAD] marker stripped, lead detected
+settings.ANTHROPIC_API_KEY = "test-key"
+claude_client._post_messages = lambda payload: {"content": [{"type": "text", "text":
+    "Rasmiy javob testi. [LEAD] Test Odam | 998900111222 | Trading [/LEAD]"}]}
+r = client.post("/admin/ai/test", data={"message": "Narxi qancha?"}, headers=auth)
+assert r.status_code == 200, r.status_code
+assert "Rasmiy javob testi" in r.text, r.text[:400]
+assert "[LEAD]" not in r.text, r.text[:400]
+assert "Test Odam" in r.text  # detected lead is displayed
+settings.ANTHROPIC_API_KEY = ""
+print("AI sandbox test window OK")
 # settings page renders
 r = client.get("/admin/settings", headers=auth)
 assert r.status_code == 200 and "Owner chat ID" in r.text
