@@ -91,3 +91,29 @@ class BusinessConnectionRecord(Base):
     owner_user_id: Mapped[int] = mapped_column(BigInteger)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProcessedUpdate(Base):
+    """update_id deduplication: every Telegram update handled once.
+
+    Telegram retries webhook deliveries on network hiccups — a row here means
+    "already processed, skip the retry".
+    """
+
+    __tablename__ = "processed_updates"
+
+    update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChatHistory(Base):
+    """Recent conversation per chat — context for Claude-generated replies."""
+
+    __tablename__ = "chat_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # "user" or "assistant"
+    role: Mapped[str] = mapped_column(String(16))
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

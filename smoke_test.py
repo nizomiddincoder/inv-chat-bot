@@ -1,23 +1,28 @@
-"""Local smoke test: webhook auth, business flow, dedup, owner-notify, admin auth.
+"""Local smoke test: webhook auth, business flow, dedup, owner-notify, admin auth,
+update_id dedup, Claude reply with [LEAD] marker, OWNER_NOTIFY_CHAT_ID routing.
 
 Run:  python smoke_test.py   (from the project root; uses a local SQLite DB)
 """
 import base64
 import logging
 import os
+import time
 
 # Must be set BEFORE importing the app (config.py reads env at import time).
 os.environ["WEBHOOK_SECRET"] = "test-secret"
 os.environ["ADMIN_USER"] = "admin"
 os.environ["ADMIN_PASSWORD"] = "test-pass"
 os.environ["OWNER_CHAT_ID"] = "111"  # the business owner is also the bot admin
+os.environ["OWNER_NOTIFY_CHAT_ID"] = "777"  # separate chat for notifications
 os.environ.pop("DATABASE_URL", None)  # use the local SQLite fallback
 
 logging.disable(logging.CRITICAL)
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app import claude_client  # noqa: E402
 from app import telegram_client as tg  # noqa: E402
+from app.config import settings  # noqa: E402
 from app.database import SessionLocal, init_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import Lead  # noqa: E402
@@ -122,8 +127,8 @@ print("edited_business_message (name fix) OK")
 business_text("99 123 45 67")  # spaced local format
 all_texts = [p.get("text", "") for m, p in sent if m == "sendMessage"]
 assert any("qabul qilindi" in t for t in all_texts), all_texts[-1]
-# owner receives the new-lead notification
-owner_notifs = [p for m, p in sent if m == "sendMessage" and p.get("chat_id") == 111]
+# owner receives the new-lead notification (at OWNER_NOTIFY_CHAT_ID = 777)
+owner_notifs = [p for m, p in sent if m == "sendMessage" and p.get("chat_id") == 777]
 assert any("Yangi lid" in p["text"] for p in owner_notifs), owner_notifs
 print("owner notification OK")
 
@@ -216,6 +221,76 @@ assert calls[-1].get("business_connection_id") is None
 assert "Assalomu alaykum" in calls[-1]["text"]
 tg._post = lambda method, payload: (sent.append((method, payload)) or {}, None)  # restore mock
 print("BUSINESS_PEER_INVALID fallback OK")
+
+# --- 7e. update_id dedup: a retried update is processed only once ---
+# (unique per run so the test can be re-run against the same DB file)
+uniq = int(time.time())
+n = len(sent)
+dup_update = {"update_id": uniq,
+              "business_message": {"business_connection_id": "conn1", "chat": {"id": 444, "type": "private"},
+              "from": {"id": 444, "first_name": "Dilnoza", "is_bot": False}, "text": "salom"}}
+client.post("/webhook", json=dup_update, headers=HEADER)
+assert len(sent) == n + 1, "first copy of the update should be processed"
+client.post("/webhook", json=dup_update, headers=HEADER)  # Telegram-style retry
+assert len(sent) == n + 1, "duplicate update_id got processed twice!"
+print("update_id dedup OK")
+
+# --- 7f. Claude answers a business message + [LEAD] marker + OWNER_NOTIFY_CHAT_ID ---
+settings.ANTHROPIC_API_KEY = "test-key"  # enable Claude mode for this section
+
+def fake_claude(payload):
+    assert payload["model"] == settings.CLAUDE_MODEL
+    assert payload["system"], "knowledge/system prompt missing"
+    return {"content": [{"type": "text", "text":
+        "Rahmat, Aziza! Ma'lumotlaringiz qabul qilindi, admin tez orada bog'lanadi. "
+        "[LEAD] Aziza Karimova | 998905554433 | Trading [/LEAD]"}]}
+
+claude_client._post_messages = fake_claude
+
+n = len(sent)
+client.post(
+    "/webhook",
+    json={"update_id": uniq + 1,
+          "business_message": {"business_connection_id": "conn1", "chat": {"id": 333, "type": "private"},
+          "from": {"id": 333, "first_name": "Aziza", "username": "aziza", "is_bot": False},
+          "text": "Trading kursiga yozilmoqchiman"}},
+    headers=HEADER,
+)
+# the visitor's reply first, then the owner notification to OWNER_NOTIFY_CHAT_ID
+visitor_msgs = [p for m, p in sent[n:] if m == "sendMessage" and p.get("chat_id") == 333]
+assert visitor_msgs, sent[n:]
+visitor_reply = visitor_msgs[-1]
+assert visitor_reply.get("business_connection_id") == "conn1"
+assert "[LEAD]" not in visitor_reply["text"], visitor_reply["text"]
+assert "qabul qilindi" in visitor_reply["text"], visitor_reply["text"]
+with SessionLocal() as s:
+    lead = s.query(Lead).filter(Lead.telegram_user_id == 333).one()
+    assert lead.full_name == "Aziza Karimova", lead.full_name
+    assert lead.phone == "+998905554433", lead.phone
+    assert lead.course == "Trading", lead.course
+    assert lead.source == "claude", lead.source
+# the notification went to OWNER_NOTIFY_CHAT_ID (777), not the owner chat (111)
+notifs = [p for m, p in sent[n:] if m == "sendMessage" and p.get("chat_id") == 777]
+assert notifs and "Yangi lid" in notifs[-1]["text"], notifs
+assert not any(m == "sendMessage" and p.get("chat_id") == 111 for m, p in sent[n:]), \
+    "notification must go to OWNER_NOTIFY_CHAT_ID, not OWNER_CHAT_ID"
+print("claude reply + [LEAD] + OWNER_NOTIFY_CHAT_ID OK")
+
+# Claude unavailable -> built-in flow answers, the visitor is never left hanging
+def broken_claude(payload):
+    raise RuntimeError("api down")
+
+claude_client._post_messages = broken_claude
+client.post(
+    "/webhook",
+    json={"update_id": uniq + 2,
+          "business_message": {"business_connection_id": "conn1", "chat": {"id": 333, "type": "private"},
+          "from": {"id": 333, "first_name": "Aziza", "is_bot": False}, "text": "salom"}},
+    headers=HEADER,
+)
+assert "Assalomu alaykum" in sent[-1][1]["text"], sent[-1][1]["text"]
+settings.ANTHROPIC_API_KEY = ""  # disable Claude mode again
+print("claude fallback to built-in flow OK")
 
 # --- 8. Admin panel auth ---
 auth = {"Authorization": "Basic " + base64.b64encode(b"admin:test-pass").decode()}

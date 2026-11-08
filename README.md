@@ -16,18 +16,20 @@ and shows them in a simple admin panel.
 ```
 inv-chat-bot/
 ├── app/
-│   ├── main.py              # FastAPI app: webhook, health check, startup
+│   ├── main.py              # FastAPI app: webhook (instant 200 + dedup), health check, startup
 │   ├── config.py            # reads environment variables
 │   ├── database.py          # DB engine, table creation, default data
 │   ├── models.py            # DB tables: leads, courses, messages, settings...
-│   ├── services.py          # business logic: flow state, validation, leads
+│   ├── services.py          # business logic: flow state, validation, leads, chat history
 │   ├── handlers.py          # answers every Telegram update (the conversation)
+│   ├── claude_client.py     # Claude (Anthropic) API: AI answers for business chats
 │   ├── telegram_client.py   # calls the Telegram Bot API with httpx
 │   ├── crm.py               # CRM adapter (TODO: connect external CRM here)
 │   ├── followup.py          # 24-hour follow-up reminders to the owner
 │   ├── admin/
 │   │   └── routes.py        # admin panel pages (/admin)
 │   └── templates/           # admin panel HTML (Uzbek)
+├── knowledge/               # knowledge files for Claude (.md / .txt) — edit freely
 ├── smoke_test.py            # local test: simulates a full chat + admin check
 ├── requirements.txt
 ├── Procfile                 # start command for Railway
@@ -72,6 +74,10 @@ Tables are created **automatically** on the first start — no migration command
    | `ADMIN_USER`     | your admin login, e.g. `admin`                                     |
    | `ADMIN_PASSWORD` | a strong password for the admin panel                              |
    | `OWNER_CHAT_ID`  | your Telegram id from @userinfobot, e.g. `123456789`               |
+   | `OWNER_NOTIFY_CHAT_ID` | *(optional)* separate chat id for lead notifications and reminders. Without it, `OWNER_CHAT_ID` / the admin-panel setting is used. That chat must have pressed **Start** in the bot once. |
+   | `ANTHROPIC_API_KEY` | *(optional)* Claude API key — enables AI answers for business messages (see the next section). `CLAUDE_API_KEY` also works. |
+   | `CLAUDE_MODEL`   | *(optional)* model id, default `claude-sonnet-4-5`                  |
+   | `CLAUDE_MAX_TOKENS` | *(optional)* max reply length, default `1024`                    |
    | `WORK_START`     | `09:00`                                                            |
    | `WORK_END`       | `20:00`                                                            |
 
@@ -141,6 +147,32 @@ Owner:    gets a private message: name, phone, course, username, time
   existing one is updated.
 - **24-hour follow-up:** if an open lead gets no reply for 24 hours, the bot
   sends **one** reminder to the *owner* (never to the visitor).
+
+## Claude AI answers (business chats)
+
+With `ANTHROPIC_API_KEY` set, **every business message is answered by Claude**
+(`CLAUDE_MODEL`) instead of the fixed button flow:
+
+- Knowledge comes from the **`knowledge/`** folder — every `.md` / `.txt` file is
+  put into the system prompt. Edit the files (or add new ones) at any time;
+  the bot re-reads them on every message, **no redeploy needed**. Start with
+  `knowledge/markaz-haqida.md` and replace the `[TO'LDIRING]` placeholders.
+- Claude sees the last 16 messages of the chat, so it answers in context.
+- When Claude has collected a visitor's **name + phone**, it appends an internal
+  `[LEAD] ... [/LEAD]` marker: the bot strips it from the reply, saves the lead
+  (dedup by user/phone, `source=claude`) and notifies **`OWNER_NOTIFY_CHAT_ID`**.
+- `/start` and "bekor qilish" still restart the chat (and clear the AI history).
+- **Fallback:** if the key is missing or the Claude API fails, the built-in
+  course → name → phone flow answers automatically — the visitor is never
+  left without a reply.
+- Without `ANTHROPIC_API_KEY` the bot works exactly as before (built-in flow).
+
+Reliability details:
+
+- **Webhook answers 200 immediately** — the update is processed in the
+  background, so Telegram never waits for Claude.
+- **Duplicate updates are skipped by `update_id`** (Telegram retries on network
+  hiccups; each update is handled exactly once).
 
 ## Admin commands inside Telegram (owner only)
 
@@ -212,6 +244,9 @@ lead) against a local SQLite database and prints `ALL_SMOKE_TESTS_PASSED` on suc
 | `Forbidden: bot can't initiate conversation with a user` | This person never pressed **Start** in the bot's chat. Not blocking the flow — business-mode replies don't need it, but owner notifications and the fallback retry do. |
 | Client popup: "You can't interact with this bot / владелец ограничил доступ" when tapping a course button | The customer has **blocked the bot** (or pressed "Stop and block") earlier. Business messages still reach them, but button taps need direct interaction with the bot. Fix: the customer opens the bot's chat (`@botname`), presses **Unblock → Start**. Without unblocking, the flow still works — the customer can simply **type the course number** (1–5) or its name instead of tapping a button. |
 | `Unauthorized` from Telegram | Wrong `BOT_TOKEN`. |
+| `Claude mode OFF (ANTHROPIC_API_KEY not set)` in logs | Business chats use the built-in flow. Set `ANTHROPIC_API_KEY` to enable AI answers. |
+| `Claude API error: ...` | Read the message: `authentication_error` = wrong key, `not_found_error` = wrong `CLAUDE_MODEL`, `rate_limit_error` = plan limit reached. The bot falls back to the built-in flow meanwhile. |
+| Owner gets no lead notifications | `OWNER_NOTIFY_CHAT_ID` (or `OWNER_CHAT_ID`) chat never pressed **Start** in the bot, or the value is wrong. |
 | Admin panel asks for login forever | Wrong `ADMIN_USER` / `ADMIN_PASSWORD` values. |
 
 ## Connecting an external CRM (later)

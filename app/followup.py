@@ -11,7 +11,7 @@ from datetime import timedelta
 from . import telegram_client as tg
 from .database import SessionLocal
 from .models import Lead, utcnow
-from .services import get_owner_chat_id
+from .services import get_owner_notify_chat_id
 
 log = logging.getLogger("bot.followup")
 
@@ -21,7 +21,7 @@ FOLLOWUP_AFTER_HOURS = 24
 
 def check_open_leads() -> None:
     """Send one follow-up reminder to the owner for each stale open lead."""
-    owner_chat_id = get_owner_chat_id()
+    owner_chat_id = get_owner_notify_chat_id()
     if owner_chat_id is None:
         log.debug("Follow-up skipped: OWNER_CHAT_ID is not set")
         return

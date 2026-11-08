@@ -54,6 +54,28 @@ class Settings:
         except ValueError:
             self.OWNER_CHAT_ID = None
 
+        # Separate chat id for notifications to the owner (new leads, follow-ups).
+        # When not set, notifications fall back to OWNER_CHAT_ID / the admin panel
+        # owner_chat_id setting.
+        notify = os.getenv("OWNER_NOTIFY_CHAT_ID", "").strip()
+        try:
+            self.OWNER_NOTIFY_CHAT_ID: int | None = int(notify) if notify else None
+        except ValueError:
+            self.OWNER_NOTIFY_CHAT_ID = None
+
+        # --- Claude (Anthropic) API: AI answers for business messages ---
+        # ANTHROPIC_API_KEY or CLAUDE_API_KEY — either name works.
+        self.ANTHROPIC_API_KEY: str = (
+            os.getenv("ANTHROPIC_API_KEY", "").strip()
+            or os.getenv("CLAUDE_API_KEY", "").strip()
+        )
+        # Model id, e.g. "claude-sonnet-4-5" (docs.claude.com -> models).
+        self.CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5").strip()
+        try:
+            self.CLAUDE_MAX_TOKENS: int = int(os.getenv("CLAUDE_MAX_TOKENS", "1024"))
+        except ValueError:
+            self.CLAUDE_MAX_TOKENS = 1024
+
     def check(self) -> list[str]:
         """Return a list of missing-but-important variable names."""
         missing = []

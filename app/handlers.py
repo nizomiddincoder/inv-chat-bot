@@ -15,13 +15,18 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func
 
+from . import claude_client
 from . import telegram_client as tg
 from .database import SessionLocal
 from .models import BusinessConnectionRecord, Course, Lead, utcnow
 from .services import (
     TZ,
+    add_history,
+    clear_history,
     get_enabled_courses,
+    get_history,
     get_owner_chat_id,
+    get_owner_notify_chat_id,
     get_state,
     is_work_hours,
     match_course,
@@ -140,7 +145,12 @@ def _handle_business_message(message: dict) -> None:
         )
         return
 
-    _process_flow(chat["id"], user, text, connection_id)
+    # Claude answers business messages (knowledge from knowledge/ files).
+    # Without an API key the built-in button flow keeps working.
+    if claude_client.is_enabled():
+        _process_with_claude(chat["id"], user, text, connection_id)
+    else:
+        _process_flow(chat["id"], user, text, connection_id)
 
 
 def _handle_edited_business_message(message: dict) -> None:
@@ -292,6 +302,81 @@ def _process_flow(chat_id: int, user: dict, text: str, business_connection_id: s
         )
     else:
         _send_welcome(chat_id, user, business_connection_id)
+
+
+# ---------------------------------------------------------------------------
+# Claude-powered answers (business messages)
+# ---------------------------------------------------------------------------
+
+# How many recent messages of the chat are sent to Claude as context.
+CLAUDE_HISTORY_MESSAGES = 16
+
+
+def _process_with_claude(
+    chat_id: int, user: dict, text: str, business_connection_id: str | None
+) -> None:
+    """Answer a business message with Claude (CLAUDE_MODEL, knowledge/ files).
+
+    When the API call fails, the built-in flow takes over so the visitor
+    always gets a reply. A [LEAD]...[/LEAD] block in Claude's answer creates
+    a lead and notifies the owner (OWNER_NOTIFY_CHAT_ID).
+    """
+    text = text.strip()
+
+    # "/start" / "bekor qilish" still restart everything (and wipe history).
+    if _is_reset_command(text):
+        clear_history(chat_id)
+        set_state(chat_id, step=0, course=None, temp_name=None)
+        _send_welcome(chat_id, user, business_connection_id)
+        return
+
+    add_history(chat_id, "user", text)
+    reply = claude_client.generate_reply(
+        get_history(chat_id, CLAUDE_HISTORY_MESSAGES)
+    )
+    if reply is None:
+        log.warning(
+            "Claude unavailable — answering chat %s with the built-in flow", chat_id
+        )
+        _process_flow(chat_id, user, text, business_connection_id)
+        return
+
+    visible, lead_name, lead_phone, lead_course = claude_client.extract_lead(reply)
+    if not visible:
+        # Claude sent only the lead marker — show the standard finish text.
+        visible = render("finish", first_name=user.get("first_name") or "do'st")
+    add_history(chat_id, "assistant", visible)
+    tg.send_message(chat_id, visible, business_connection_id=business_connection_id)
+
+    if lead_phone:
+        _save_claude_lead(user, lead_name, lead_phone, lead_course)
+
+
+def _save_claude_lead(
+    user: dict, name: str | None, phone: str | None, course: str | None
+) -> None:
+    """Create/update the lead Claude collected and notify the owner."""
+    normalized = normalize_phone(phone or "")
+    if normalized is None:
+        log.warning("Claude sent an invalid phone %r — lead not saved", phone)
+        return
+    full_name = (
+        validate_name(name or "")
+        or (name or "").strip()[:50]
+        or (user.get("first_name") or "Noma'lum")
+    )
+    matched = match_course(course or "", get_enabled_courses())
+    course_name = matched.name if matched else ((course or "").strip()[:120] or None)
+    lead = upsert_lead(
+        telegram_user_id=user["id"],
+        username=user.get("username"),
+        first_name=user.get("first_name"),
+        course=course_name,
+        full_name=full_name,
+        phone=normalized,
+        source="claude",
+    )
+    _notify_owner_new_lead(lead)
 
 
 # ---------------------------------------------------------------------------
@@ -460,13 +545,15 @@ def _handle_callback_query(callback: dict) -> None:
 def _notify_owner_new_lead(lead) -> None:
     """Tell the owner in a private Telegram message that a new lead arrived.
 
-    Note: the owner must have pressed Start in the bot chat at least once,
+    Goes to OWNER_NOTIFY_CHAT_ID when set, otherwise the regular owner chat
+    id. Note: the owner must have pressed Start in the bot chat at least once,
     otherwise Telegram does not allow the bot to message them.
     """
-    owner_chat_id = get_owner_chat_id()
+    owner_chat_id = get_owner_notify_chat_id()
     if owner_chat_id is None:
         log.warning(
-            "OWNER_CHAT_ID is not set (env or admin Settings page) — cannot notify about lead %s",
+            "Neither OWNER_NOTIFY_CHAT_ID nor OWNER_CHAT_ID is set (env or admin "
+            "Settings page) — cannot notify about lead %s",
             lead.id,
         )
         return

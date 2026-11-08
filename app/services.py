@@ -1,13 +1,25 @@
 """Business logic shared by the bot handlers and the admin panel."""
 import logging
+import random
 import re
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
+
+from sqlalchemy.exc import IntegrityError
 
 from .config import settings
 from .crm import push_lead
 from .database import SessionLocal
-from .models import BotMessage, ChatState, Course, Lead, Setting, utcnow
+from .models import (
+    BotMessage,
+    ChatState,
+    ChatHistory,
+    Course,
+    Lead,
+    ProcessedUpdate,
+    Setting,
+    utcnow,
+)
 
 log = logging.getLogger("bot.services")
 
@@ -80,6 +92,101 @@ def get_owner_chat_id() -> int | None:
         return int(value) if value else None
     except (TypeError, ValueError):
         return None
+
+
+def get_owner_notify_chat_id() -> int | None:
+    """Where to send notifications to the owner (new leads, follow-ups).
+
+    OWNER_NOTIFY_CHAT_ID env first; when not set, falls back to the regular
+    owner chat id (admin panel setting or OWNER_CHAT_ID).
+    """
+    if settings.OWNER_NOTIFY_CHAT_ID:
+        return settings.OWNER_NOTIFY_CHAT_ID
+    return get_owner_chat_id()
+
+
+# ---------------------------------------------------------------------------
+# update_id deduplication (Telegram retries must never be processed twice)
+# ---------------------------------------------------------------------------
+
+UPDATE_TTL_DAYS = 7  # how long processed update_ids are remembered
+
+
+def claim_update(update_id: int) -> bool:
+    """Try to mark an update_id as processed. False -> duplicate, skip it.
+
+    The insert doubles as the lock: a concurrent request for the same
+    update_id hits the primary key and gets IntegrityError.
+    """
+    with SessionLocal() as session:
+        try:
+            session.add(ProcessedUpdate(update_id=update_id))
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            log.info("Duplicate update_id %s skipped", update_id)
+            return False
+        # Occasionally drop old rows so the table stays tiny.
+        if random.random() < 0.02:
+            cutoff = utcnow() - timedelta(days=UPDATE_TTL_DAYS)
+            deleted = (
+                session.query(ProcessedUpdate)
+                .filter(ProcessedUpdate.received_at < cutoff)
+                .delete(synchronize_session=False)
+            )
+            if deleted:
+                session.commit()
+                log.debug("Cleaned %s old processed_updates rows", deleted)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Chat history (context for Claude-generated replies)
+# ---------------------------------------------------------------------------
+
+HISTORY_KEEP_PER_CHAT = 50  # hard cap stored per chat
+
+
+def add_history(chat_id: int, role: str, text: str) -> None:
+    """Store one message of the conversation and prune rows beyond the cap."""
+    with SessionLocal() as session:
+        session.add(ChatHistory(chat_id=chat_id, role=role, text=text[:4000]))
+        session.commit()
+        keep = (
+            session.query(ChatHistory.id)
+            .filter(ChatHistory.chat_id == chat_id)
+            .order_by(ChatHistory.id.desc())
+            .limit(HISTORY_KEEP_PER_CHAT)
+            .all()
+        )
+        if len(keep) == HISTORY_KEEP_PER_CHAT:  # only prune when over the cap
+            session.query(ChatHistory).filter(
+                ChatHistory.chat_id == chat_id,
+                ChatHistory.id.notin_([row[0] for row in keep]),
+            ).delete(synchronize_session=False)
+            session.commit()
+
+
+def get_history(chat_id: int, limit: int = 16) -> list[dict]:
+    """Last `limit` messages of a chat, oldest first: [{"role", "text"}, ...]."""
+    with SessionLocal() as session:
+        rows = (
+            session.query(ChatHistory)
+            .filter(ChatHistory.chat_id == chat_id)
+            .order_by(ChatHistory.id.desc())
+            .limit(limit)
+            .all()
+        )
+    return [{"role": row.role, "text": row.text} for row in reversed(rows)]
+
+
+def clear_history(chat_id: int) -> None:
+    """Forget the whole conversation (used when the visitor resets the chat)."""
+    with SessionLocal() as session:
+        session.query(ChatHistory).filter(ChatHistory.chat_id == chat_id).delete(
+            synchronize_session=False
+        )
+        session.commit()
 
 
 def get_work_hours() -> tuple[time, time]:
