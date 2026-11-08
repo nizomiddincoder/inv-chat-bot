@@ -208,6 +208,7 @@ lead) against a local SQLite database and prints `ALL_SMOKE_TESTS_PASSED` on suc
 | `403 Forbidden` spam in logs | Something is calling `/webhook` without the secret — harmless, Telegram requests will still work. |
 | `Telegram API sendMessage failed: ...` | Read the description. Common: `bot was blocked by the user`, or the owner never pressed Start in the bot chat. |
 | `BUSINESS_PEER_INVALID` | The reply was sent to a chat that does not belong to the connected business account. Check: **Settings → Business → Chatbots** — disconnect and reconnect the bot (required after changing bot settings in @BotFather); make sure **Business Mode** is enabled in @BotFather; make sure the chat is not excluded in the Chatbots chat list. The bot retries once without the connection id and logs the details. |
+| `Forbidden: bot was blocked by the user` | This person **blocked the bot** in Telegram. A blocked bot also cannot reply through the business connection (you will see `BUSINESS_PEER_INVALID` for the same chat first). Fix: the user opens the bot's chat and presses **Unblock / Start**, then sends `/start`. Then business replies work again. |
 | `Unauthorized` from Telegram | Wrong `BOT_TOKEN`. |
 | Admin panel asks for login forever | Wrong `ADMIN_USER` / `ADMIN_PASSWORD` values. |
 

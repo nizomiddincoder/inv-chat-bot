@@ -105,7 +105,17 @@ def send_message(
         result, error = _post("sendMessage", payload)
 
     if result is None and error:
-        log.error("Telegram API sendMessage failed: %s (chat_id=%s)", error, chat_id)
+        if "bot was blocked by the user" in error:
+            log.error(
+                "Telegram API sendMessage failed: %s (chat_id=%s). "
+                "HINT: this user has BLOCKED the bot in Telegram. That also blocks "
+                "business-mode replies (BUSINESS_PEER_INVALID). Ask the user to open "
+                "the bot's chat, press Unblock (or Start), then send /start.",
+                error,
+                chat_id,
+            )
+        else:
+            log.error("Telegram API sendMessage failed: %s (chat_id=%s)", error, chat_id)
     return result
 
 
