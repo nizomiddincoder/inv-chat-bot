@@ -64,6 +64,9 @@ class Group(Base):
     # ochiq | toldi | tugagan ("toldi" is set automatically when seats fill up)
     status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Telegram chat the bot monitors for this group (bot added as admin there):
+    # homework is posted here and day-before lesson reminders are sent.
+    tg_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -317,6 +320,41 @@ class ChatHistory(Base):
     role: Mapped[str] = mapped_column(String(16))
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Lesson(Base):
+    """One lesson of a group (a date from the group's schedule).
+
+    The teacher (or admin) writes the homework/assignment for the lesson —
+    in advance or right after the lesson — and the bot posts it to the
+    group's Telegram chat. The day before a lesson the bot reminds the group
+    about the last given homework.
+    """
+
+    __tablename__ = "lessons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(Integer, index=True)
+    lesson_date: Mapped[date] = mapped_column(Date, index=True)
+    homework: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When the homework was posted to the group's Telegram chat (if it was).
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AppAsset(Base):
+    """Small binary assets stored in the DB (Railway filesystem is ephemeral).
+
+    Used for the branding logo: base64-encoded, served from /branding/logo.
+    """
+
+    __tablename__ = "app_assets"
+
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    mime: Mapped[str] = mapped_column(String(50), default="image/png")
+    data: Mapped[str] = mapped_column(Text)  # base64
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AiSetting(Base):

@@ -182,9 +182,9 @@ def pwa_manifest() -> JSONResponse:
             "theme_color": "#5B6CF0",
             "icons": [
                 {
-                    "src": "/app-icon.svg",
+                    "src": "/branding/logo",
                     "sizes": "any",
-                    "type": "image/svg+xml",
+                    "type": "image/png",
                     "purpose": "any",
                 }
             ],
@@ -195,6 +195,41 @@ def pwa_manifest() -> JSONResponse:
 @app.get("/app-icon.svg")
 def pwa_icon() -> Response:
     return Response(content=_APP_ICON_SVG, media_type="image/svg+xml")
+
+
+_DEFAULT_LOGO_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
+    "<circle cx='16' cy='16' r='16' fill='#5B6CF0'/>"
+    "<text x='16' y='21.5' font-family='Arial,sans-serif' font-size='15' "
+    "font-weight='700' fill='white' text-anchor='middle'>M</text></svg>"
+)
+
+
+@app.get("/branding/logo")
+def branding_logo() -> Response:
+    """The center's logo (favicon, sidebar, manifest). Public — no session.
+
+    Serves the logo uploaded in Settings (stored in the DB as base64);
+    without one, the default "M" mark is returned.
+    """
+    import base64 as _base64
+
+    from .database import SessionLocal
+    from .models import AppAsset
+
+    with SessionLocal() as session:
+        asset = session.get(AppAsset, "logo")
+    if asset is not None:
+        try:
+            return Response(
+                content=_base64.b64decode(asset.data),
+                media_type=asset.mime or "image/png",
+                headers={"Cache-Control": "public, max-age=300"},
+            )
+        except Exception:
+            logging.getLogger("branding").exception("Logo decode failed")
+    return Response(content=_DEFAULT_LOGO_SVG, media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.get("/sw.js")

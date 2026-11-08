@@ -45,7 +45,7 @@ print("webhook auth OK")
 r = client.get("/admin/leads", follow_redirects=False)
 assert r.status_code == 302 and "/admin/login" in r.headers["location"], (r.status_code, r.headers)
 r = client.get("/admin/leads")  # follow the redirect -> login page
-assert "Markaz CRM" in r.text and "Parol" in r.text
+assert "CRM" in r.text and "Parol" in r.text  # center name (default) + login form
 r = client.post("/admin/login", data={"login": "admin", "password": "wrong-pass"})
 assert r.status_code == 401 and "xato" in r.text
 r = client.post("/admin/login", data={"login": "admin", "password": "test-pass"}, follow_redirects=False)
@@ -1002,6 +1002,146 @@ with SessionLocal() as s:
     s.commit()
 print("stage-4 cleanup OK")
 
+# --- 8g2. Branding, admin credentials, group monitoring + lessons/homework ---
+from datetime import datetime, timedelta  # noqa: E402
+
+from app.models import Lesson  # noqa: E402
+from app.services import TZ  # noqa: E402
+from app.services import (  # noqa: E402
+    get_center_name,
+    get_lesson,
+    parse_schedule_days,
+    upcoming_lesson_dates,
+)
+
+# 1. branding: name is saved, shown across pages, /branding/logo is public
+r = client.post("/admin/settings/branding", data={"center_name": "INVENTOR TEST MARKAZ"},
+                headers=auth, follow_redirects=False)
+assert r.status_code == 303
+assert get_center_name() == "INVENTOR TEST MARKAZ"
+r = client.get("/admin/kanban", headers=auth)
+assert "INVENTOR TEST MARKAZ" in r.text  # sidebar/topbar use the new name
+r = client.get("/branding/logo")
+assert r.status_code == 200  # public: no session required
+import base64 as _b64  # noqa: E402
+
+_png = _b64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+r = client.post("/admin/settings/branding", data={"center_name": "INVENTOR TEST MARKAZ"},
+                files={"logo": ("logo.png", _png, "image/png")},
+                headers=auth, follow_redirects=False)
+assert r.status_code == 303
+r = client.get("/branding/logo", headers=auth)
+assert r.status_code == 200 and r.headers["content-type"].startswith("image/png")
+r = client.post("/admin/settings/branding/remove-logo", headers=auth, follow_redirects=False)
+assert r.status_code == 303
+r = client.get("/branding/logo")
+assert r.headers["content-type"].startswith("image/svg")  # default "M" mark is back
+print("branding name+logo OK")
+
+# 2. credentials: change login+password, old session and old login die
+r = client.post("/admin/settings/credentials",
+                data={"current_password": "wrong-pass", "admin_login": "bosh_admin",
+                      "admin_password": "yangi-parol-1"},
+                headers=auth, follow_redirects=False)
+assert r.status_code == 303 and "error=creds" in r.headers["location"], r.headers  # wrong current password
+r = client.post("/admin/settings/credentials",
+                data={"current_password": "test-pass", "admin_login": "bosh_admin",
+                      "admin_password": "yangi-parol-1"},
+                headers=auth, follow_redirects=False)
+assert r.status_code == 303 and "/admin/login" in r.headers["location"], r.headers
+r = client.get("/admin/leads", follow_redirects=False)
+assert r.status_code in (302, 303), r.status_code  # old session invalidated
+r = client.post("/admin/login", data={"login": "admin", "password": "test-pass"}, follow_redirects=False)
+assert r.status_code == 401  # old login is dead
+r = client.post("/admin/login", data={"login": "bosh_admin", "password": "yangi-parol-1"}, follow_redirects=False)
+assert r.status_code == 303
+# revert so re-runs keep working
+r = client.post("/admin/settings/credentials",
+                data={"current_password": "yangi-parol-1", "admin_login": "admin",
+                      "admin_password": "test-pass"},
+                headers=auth, follow_redirects=False)
+assert r.status_code == 303
+r = client.post("/admin/login", data={"login": "admin", "password": "test-pass"}, follow_redirects=False)
+assert r.status_code == 303
+with SessionLocal() as s:
+    from app.models import Setting
+    s.query(Setting).filter(Setting.key.in_(["admin_login", "admin_password_hash"])).delete(synchronize_session=False)
+    s.commit()
+print("admin credentials change OK")
+
+# 3. group monitoring: tg_chat_id + lessons + homework save/send/reminders
+tg._post = lambda method, payload: (sent.append((method, payload)) or {}, None)  # recording mock again
+with SessionLocal() as s:
+    s.query(Group).filter(Group.name == "Nazorat guruhi").delete(synchronize_session=False)
+    s.commit()
+tomorrow = (datetime.now(TZ) + timedelta(days=1)).date()
+weekday_code = ["Du", "Se", "Chor", "Pay", "Ju", "Sha", "Ya"][tomorrow.weekday()]
+schedule = f"{weekday_code} 16:00"
+client.post("/admin/groups/add",
+            data={"name": "Nazorat guruhi", "schedule": schedule,
+                  "tg_chat_id": "-100999888777", "capacity": "0"},
+            headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    group = s.query(Group).filter(Group.name == "Nazorat guruhi").one()
+    assert group.tg_chat_id == -100999888777
+    gid = group.id
+    group_id_str = str(gid)
+assert weekday_code.lower() in {key for key in ("du", "se", "chor", "pay", "ju", "sha", "ya")}
+assert tomorrow.weekday() in parse_schedule_days(schedule)
+dates = upcoming_lesson_dates(schedule, datetime.now(TZ).date(), 3)
+assert tomorrow in dates, (dates, schedule)
+today_str = datetime.now(TZ).date().isoformat()
+
+# save homework for "yesterday's" lesson, then send it to the group chat
+yesterday = (datetime.now(TZ) - timedelta(days=1)).date().isoformat()
+r = client.post("/admin/lessons/save",
+                data={"group_id": group_id_str, "lesson_date": yesterday,
+                      "homework": "12-mashq, 45-bet"},
+                headers=auth)
+assert r.json()["ok"] is True, r.text
+r = client.post("/admin/lessons/send",
+                data={"group_id": group_id_str, "lesson_date": yesterday}, headers=auth)
+assert r.json()["ok"] is True, r.text
+sent_to_group = [p for m, p in sent if m == "sendMessage" and p.get("chat_id") == -100999888777]
+assert sent_to_group and "12-mashq, 45-bet" in sent_to_group[-1]["text"], sent[-5:]
+with SessionLocal() as s:
+    lesson = get_lesson(gid, datetime.now(TZ).date() - timedelta(days=1))
+    assert lesson.posted_at is not None
+    assert "topshiriq" in (lesson.homework or "").lower() or lesson.homework == "12-mashq, 45-bet"
+
+# day-before reminder: tomorrow is a lesson day -> homework reminder to the group
+from app import reminders as reminders_mod  # noqa: E402
+from app.models import ReminderLog  # noqa: E402
+
+client.post("/admin/settings",
+            data={"work_start": "00:00", "work_end": "23:59", "owner_chat_id": "111",
+                  "reminders_enabled": "on"},
+            headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    s.query(ReminderLog).filter(ReminderLog.kind == "homework").delete(synchronize_session=False)
+    from app.services import set_setting
+    set_setting("reminders_enabled", "1")
+reminders_mod.check_reminders()
+sent_hw = [p for m, p in sent if m == "sendMessage" and p.get("chat_id") == -100999888777
+           and "bajardingizmi" in p.get("text", "")]
+assert sent_hw, sent[-5:]
+with SessionLocal() as s:
+    assert s.query(ReminderLog).filter(ReminderLog.kind == "homework", ReminderLog.status == "sent").count() == 1
+# next check the same day -> deduplicated
+reminders_mod.check_reminders()
+with SessionLocal() as s:
+    assert s.query(ReminderLog).filter(ReminderLog.kind == "homework", ReminderLog.status == "sent").count() == 1
+print("group monitoring + homework reminder OK")
+
+# cleanup: monitored group, lessons, reminder logs
+with SessionLocal() as s:
+    s.query(Lesson).filter(Lesson.group_id == gid).delete(synchronize_session=False)
+    s.query(ReminderLog).filter(ReminderLog.kind == "homework").delete(synchronize_session=False)
+    s.query(Group).filter(Group.id == gid).delete(synchronize_session=False)
+    s.commit()
+
 # --- 8h. Stage 5: backups, error journal, login throttle, PWA, test data ---
 from pathlib import Path as _Path  # noqa: E402
 from app import backup as backup_mod  # noqa: E402
@@ -1035,11 +1175,22 @@ print("purge staging guard OK")
 # 1c. restore: corrupt data -> restore from the backup above -> data back
 from app.models import Course  # noqa: E402
 
+# re-run safety: a previous run may have crashed between corruption and restore
+with SessionLocal() as s:
+    s.query(Course).filter(Course.name == "RESTORE_JUNK_QOSHILDI").delete(synchronize_session=False)
+    first = s.query(Course).order_by(Course.id).first()
+    if first is not None and first.name == "BUZILGAN NOM":
+        first.name = "Kompyuter savodxonlik"
+    s.commit()
+
 with SessionLocal() as s:
     n_courses_before = s.query(Course).count()
     n_leads_before = s.query(Lead).count()
     real_name = s.query(Course).order_by(Course.id).first().name
     real_lead_id = s.query(Lead).order_by(Lead.id).first().id
+# fresh snapshot AFTER the pre-clean (the 8h-1 backup may predate it)
+clean_filename, err = backup_mod.create_backup(actor="admin")
+assert err is None, err
 # corrupt: rename + junk row + wipe leads entirely
 with SessionLocal() as s:
     c = s.get(Course, s.query(Course).order_by(Course.id).first().id)
@@ -1047,7 +1198,7 @@ with SessionLocal() as s:
     s.add(Course(name="RESTORE_JUNK_QOSHILDI"))
     s.query(Lead).delete(synchronize_session=False)
     s.commit()
-ok, err = backup_mod.restore_backup(filename, actor="admin")
+ok, err = backup_mod.restore_backup(clean_filename, actor="admin")
 assert ok, err
 with SessionLocal() as s:
     assert s.query(Course).count() == n_courses_before
@@ -1064,7 +1215,7 @@ with SessionLocal() as s:
     last = s.query(AuditLog).filter(AuditLog.entity == "backup").order_by(AuditLog.id.desc()).first()
     assert last.action == "tiklandi" and "xavfsizlik nusxa" in (last.new_value or "")
 # restore route works as well
-r = client.post("/admin/backups/restore", data={"name": filename}, headers=auth)
+r = client.post("/admin/backups/restore", data={"name": clean_filename}, headers=auth)
 assert r.status_code == 200 and r.json()["ok"] is True, r.text
 r = client.get("/admin/backups", headers=auth)
 assert "Tiklash" in r.text  # restore button rendered

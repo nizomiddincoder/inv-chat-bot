@@ -101,6 +101,7 @@ def _migrate_schema() -> None:
             "capacity": "INTEGER",
             "status": "VARCHAR(20)",
             "starts_on": "DATE",
+            "tg_chat_id": "BIGINT",
         },
         "students": {
             "discount_type": "VARCHAR(10)",

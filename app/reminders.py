@@ -1,13 +1,17 @@
 """Telegram reminders — sent only inside working hours (Tashkent time).
 
-Three kinds, each deduplicated per day in the reminder_log journal:
+Four kinds, each deduplicated per day in the reminder_log journal:
   - group_start: to every active student 1 day before the group starts
   - trial:       to the lead 1 day before the trial lesson
   - debt:        weekly (Mondays) to students with a debt
+  - homework:    to the monitored group chat 1 day before a lesson — the bot
+                 repeats the last given homework; when nothing is prepared,
+                 the owner is asked to have the teacher write it
 
 A message can only be delivered when we know the recipient's chat id —
-that is the Telegram user id of the original lead (bot chats). Students
-added by hand (no Telegram) are logged as "skipped".
+that is the Telegram user id of the original lead (bot chats), or the
+group's Telegram chat id (bot added as admin there). Students added by
+hand (no Telegram) are logged as "skipped".
 
 The whole feature is toggled by the "reminders_enabled" setting in the
 admin panel (Sozlamalar page); the test button posts to the owner chat.
@@ -18,12 +22,14 @@ from datetime import datetime, timedelta, timezone
 
 from . import telegram_client as tg
 from .database import SessionLocal
-from .models import Course, Group, Lead, Payment, ReminderLog, Student
+from .models import Course, Group, Lead, Lesson, Payment, ReminderLog, Student
 from .services import (
     TZ,
+    get_center_name,
     get_owner_notify_chat_id,
     is_work_hours,
     monthly_price,
+    parse_schedule_days,
     student_debt,
 )
 
@@ -78,7 +84,7 @@ def _send_and_log(kind: str, target_id: int, chat_id: int | None, text: str) -> 
                                     status="skipped", detail="bugun allaqachon yuborilgan"))
             session.commit()
             return False
-    if chat_id is None or chat_id <= 0:
+    if chat_id is None:
         with SessionLocal() as session:
             session.add(ReminderLog(kind=kind, target_id=target_id, chat_id=chat_id,
                                     status="skipped", detail="chat id yo'q (Telegram orqali kelgan lid emas)"))
@@ -165,9 +171,10 @@ def check_reminders() -> None:
             .filter(Lead.trial_date == tomorrow, Lead.status == "trial")
             .all()
         )
+        center = get_center_name()
         for lead in trials:
             text = (
-                f"Eslatma: \"Inventor Innovation Center\"dagi sinov darsingiz ertaga"
+                f"Eslatma: \"{center}\"dagi sinov darsingiz ertaga"
                 f" ({lead.trial_date.strftime('%d.%m')}). Ko'rishguncha!"
             )
             chat_id = lead.telegram_user_id if lead.telegram_user_id and lead.telegram_user_id > 0 else None
@@ -201,6 +208,42 @@ def check_reminders() -> None:
                     + " To'lov uchun markazga murojaat qiling."
                 )
                 _send_and_log("debt", student.id, _student_chat_id(session, student), text)
+
+        # 4. homework: 1 day before a lesson, remind the monitored group chat
+        # about the last given homework; if nothing is prepared — ask the owner
+        monitored = (
+            session.query(Group)
+            .filter(Group.tg_chat_id.isnot(None), Group.is_enabled.is_(True))
+            .all()
+        )
+        for group in monitored:
+            if tomorrow.weekday() not in parse_schedule_days(group.schedule):
+                continue
+            last_homework = (
+                session.query(Lesson)
+                .filter(
+                    Lesson.group_id == group.id,
+                    Lesson.lesson_date <= today,
+                    Lesson.homework.isnot(None),
+                    Lesson.homework != "",
+                )
+                .order_by(Lesson.lesson_date.desc())
+                .first()
+            )
+            if last_homework is not None:
+                text = (
+                    f"📚 \"{group.name}\" — ertaga dars bor"
+                    + (f" ({group.schedule})." if group.schedule else ".")
+                    + "\nOldingi darsda berilgan topshiriqni bajardingizmi?\n\n"
+                    f"Topshiriq: {last_homework.homework[:600]}"
+                )
+            else:
+                text = (
+                    f"⚠️ \"{group.name}\" guruhi ertaga dars qiladi, lekin topshiriq "
+                    "hali tayyorlanmagan. O'qituvchidan topshiriqni panelda "
+                    "(O'qituvchilar → Topshiriqlar) yozib qo'yishini so'rang."
+                )
+            _send_and_log("homework", group.id, group.tg_chat_id, text)
 
 
 def _loop() -> None:

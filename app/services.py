@@ -281,6 +281,209 @@ def set_ai_text(key: str, text: str) -> None:
         session.commit()
 
 
+# ---------------------------------------------------------------------------
+# Branding: center name (DB-driven, shown across the whole app)
+# ---------------------------------------------------------------------------
+
+CENTER_NAME_KEY = "center_name"
+DEFAULT_CENTER_NAME = "Inventor Innovation Center"
+
+
+def get_center_name() -> str:
+    """The training center name shown in the sidebar, titles and messages."""
+    name = (get_setting(CENTER_NAME_KEY, "") or "").strip()
+    return name or DEFAULT_CENTER_NAME
+
+
+# ---------------------------------------------------------------------------
+# Admin credentials (DB override for the env ADMIN_USER / ADMIN_PASSWORD)
+# ---------------------------------------------------------------------------
+
+ADMIN_LOGIN_KEY = "admin_login"
+ADMIN_PASSWORD_HASH_KEY = "admin_password_hash"
+
+
+def _hash_password(password: str) -> str:
+    """pbkdf2_hmac, no external dependencies: pbkdf2$iter$salt$hash."""
+    import hashlib
+    import os as _os
+
+    salt = _os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
+    return f"pbkdf2$200000${salt.hex()}${digest.hex()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    import hashlib
+    import hmac
+
+    try:
+        scheme, iterations, salt_hex, hash_hex = (stored or "").split("$")
+        if scheme != "pbkdf2":
+            return False
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(iterations)
+        )
+        return hmac.compare_digest(digest.hex(), hash_hex)
+    except (ValueError, TypeError):
+        return False
+
+
+def get_admin_login() -> str | None:
+    """The DB-stored admin login, or None when the env credential is used."""
+    login = (get_setting(ADMIN_LOGIN_KEY, "") or "").strip()
+    return login or None
+
+
+def verify_admin_credentials(login: str, password: str) -> bool:
+    """Check admin credentials: DB override first, env fallback."""
+    stored_login = get_admin_login()
+    if stored_login is not None:
+        stored_hash = get_setting(ADMIN_PASSWORD_HASH_KEY, "") or ""
+        import hmac
+
+        login_ok = hmac.compare_digest(
+            (login or "").encode(), stored_login.encode()
+        )
+        return login_ok and _verify_password(password or "", stored_hash)
+    return check_env_credentials(login, password)
+
+
+def check_env_credentials(login: str, password: str) -> bool:
+    """Constant-time comparison against the env credentials."""
+    expected_login = settings.ADMIN_USER
+    expected_password = settings.ADMIN_PASSWORD
+    if not expected_password:
+        return False  # panel disabled without ADMIN_PASSWORD
+    import hmac
+
+    login_ok = hmac.compare_digest((login or "").encode(), expected_login.encode())
+    password_ok = hmac.compare_digest(
+        (password or "").encode(), expected_password.encode()
+    )
+    return login_ok and password_ok
+
+
+def set_admin_credentials(login: str, password: str) -> None:
+    """Store the admin login + password hash in the DB (overrides env)."""
+    set_setting(ADMIN_LOGIN_KEY, login.strip())
+    set_setting(ADMIN_PASSWORD_HASH_KEY, _hash_password(password))
+
+
+# ---------------------------------------------------------------------------
+# Group schedule parsing + lessons/homework
+# ---------------------------------------------------------------------------
+
+# Uzbek weekday tokens -> ISO weekday (Monday=0).
+WEEKDAY_TOKENS = {"du": 0, "se": 1, "chor": 2, "pay": 3, "ju": 4, "sha": 5, "ya": 6}
+WEEKDAY_LABELS = ["Du", "Se", "Chor", "Pay", "Ju", "Sha", "Ya"]
+
+
+def parse_schedule_days(schedule: str | None) -> set[int]:
+    """ISO weekdays (Mon=0) from a schedule string like 'Du-Chor-Ju 16:00'."""
+    days: set[int] = set()
+    if not schedule:
+        return days
+    head = schedule.strip().split()[0]
+    for token in re.split(r"[-/,]+", head):
+        token = token.strip().lower()
+        if not token:
+            continue
+        if token in WEEKDAY_TOKENS:
+            days.add(WEEKDAY_TOKENS[token])
+        else:
+            # prefix match: "chorsha" -> "chor", "sha" -> "sha"/"se"...
+            for key, value in WEEKDAY_TOKENS.items():
+                if token.startswith(key) or key.startswith(token):
+                    days.add(value)
+                    break
+    return days
+
+
+def upcoming_lesson_dates(schedule: str | None, start: date, count: int = 6) -> list[date]:
+    """The next `count` lesson dates from the group's schedule weekdays."""
+    days = parse_schedule_days(schedule)
+    if not days:
+        return []
+    result: list[date] = []
+    cursor = start
+    while len(result) < count and cursor < start + timedelta(days=90):
+        if cursor.weekday() in days:
+            result.append(cursor)
+        cursor += timedelta(days=1)
+    return result
+
+
+def get_lesson(group_id: int, lesson_date: date):
+    """Existing Lesson row for a group/date, or None."""
+    from .models import Lesson
+
+    with SessionLocal() as session:
+        return (
+            session.query(Lesson)
+            .filter(Lesson.group_id == group_id, Lesson.lesson_date == lesson_date)
+            .first()
+        )
+
+
+def save_homework(group_id: int, lesson_date: date, homework: str, author: str | None):
+    """Create or update the Lesson row for a group/date with the homework text."""
+    from .models import Lesson
+
+    with SessionLocal() as session:
+        lesson = (
+            session.query(Lesson)
+            .filter(Lesson.group_id == group_id, Lesson.lesson_date == lesson_date)
+            .first()
+        )
+        if lesson is None:
+            lesson = Lesson(group_id=group_id, lesson_date=lesson_date)
+            session.add(lesson)
+        lesson.homework = homework.strip() or None
+        lesson.created_by = author
+        session.commit()
+        session.refresh(lesson)
+        log_audit(
+            author or "bot", "lesson", lesson.id,
+            "yaratildi" if lesson.posted_at is None and not lesson.homework else "ozgartirildi",
+            "topshiriq", None, (lesson.homework or "")[:120],
+        )
+        return lesson
+
+
+def post_homework_to_group(lesson_id: int, actor: str | None = "bot") -> tuple[bool, str]:
+    """Post a lesson's homework to the group's Telegram chat (bot = admin there)."""
+    from . import telegram_client as tg
+    from .models import Group, Lesson
+
+    with SessionLocal() as session:
+        lesson = session.get(Lesson, lesson_id)
+        if lesson is None or not lesson.homework:
+            return False, "Topshiriq yozilmagan"
+        group = session.get(Group, lesson.group_id)
+        if group is None or not group.tg_chat_id:
+            return False, "Guruhga Telegram chat ID kiritilmagan"
+        chat_id = group.tg_chat_id
+        group_name = group.name
+        schedule = group.schedule or ""
+
+    text = (
+        f"📚 {group_name} — {lesson.lesson_date.strftime('%d.%m.%Y')} darsi topshirig'i:\n"
+        f"{lesson.homework}"
+        + (f"\n⏰ {schedule}" if schedule else "")
+    )
+    ok = tg.send_message(chat_id, text) is not None
+    if ok:
+        with SessionLocal() as session:
+            lesson = session.get(Lesson, lesson_id)
+            if lesson:
+                lesson.posted_at = utcnow()
+                session.commit()
+        log_audit(actor or "bot", "lesson", lesson_id, "yuborildi", None, None,
+                  f"chat {chat_id}")
+    return ok, ("Guruhga yuborildi" if ok else "Yuborib bo'lmadi — loglarni tekshiring")
+
+
 def get_work_hours() -> tuple[time, time]:
     start = get_setting("work_start", settings.WORK_START) or "09:00"
     end = get_setting("work_end", settings.WORK_END) or "20:00"

@@ -102,6 +102,10 @@
       <label for="new-capacity">O'rinlar soni</label>
       <input type="number" name="capacity" id="new-capacity" value="0" title="0 — cheklanmagan. To'lganda guruh avtomatik 'To'ldi' bo'ladi">
     </div>
+    <div class="fld">
+      <label for="new-tg-chat">Telegram guruh ID (ixtiyoriy)</label>
+      <input type="text" name="tg_chat_id" id="new-tg-chat" placeholder="-1001234567890" title="Botni Telegram guruhiga admin qilib qo'shib, shu guruh ID sini kiritsangiz — topshiriqlar va eslatmalar shu chatga ketadi">
+    </div>
     <button type="submit">Qo'shish</button>
   </form>
   <div class="field-error" id="name-error" hidden>Guruh nomini kiriting.</div>
@@ -175,9 +179,15 @@
     </label>
     <button type="button" class="danger small g-del">O'chirish</button>
   </div>
-  <div style="grid-column:1/-1;display:flex;align-items:center;gap:10px;">
+  <div style="grid-column:1/-1;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <span class="g-status {{ g.status or 'ochiq' }}">{{ group_statuses[g.status or 'ochiq'] }}</span>
     <span class="hint" style="margin:0;">Faol talabalar: {{ g_active.get(g.id, 0) }}{% if g.capacity %} / {{ g.capacity }} o'rin{% endif %}</span>
+    <div class="fld" style="min-width:220px;">
+      <label>Telegram guruh ID (nazorat uchun)</label>
+      <input type="text" data-f="tg_chat_id" value="{{ g.tg_chat_id or '' }}" data-orig="{{ g.tg_chat_id or '' }}"
+             placeholder="-1001234567890"
+             title="Botni guruhga admin qo'shib, shu ID ni kiritsangiz — topshiriqlar va eslatmalar shu chatga ketadi">
+    </div>
   </div>
 </div>
 {% else %}

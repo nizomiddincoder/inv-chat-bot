@@ -1,7 +1,53 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Sozlamalar</h1>
-<p class="page-sub">Ish vaqti, egaga xabar yuborish uchun chat ID va eslatmalar.</p>
+<p class="page-sub">Markaz nomi, logotip, admin kiri, ish vaqti va eslatmalar.</p>
+
+{% if request.query_params.get("error") == "creds" %}
+<div class="flash" style="background:var(--danger-bg);border-color:var(--danger-text);color:var(--danger-text)">
+  Joriy parol noto'g'ri — o'zgarish saqlanmadi.
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Markaz nomi va logotip</h2>
+  <p class="hint">Nom va logotip butun panelda (menyu, sarlavha, brauzer tab ikonkasi) darhol almashadi.</p>
+  <form method="post" action="/admin/settings/branding" enctype="multipart/form-data">
+    <label>O'quv markaz nomi</label>
+    <input type="text" name="center_name" value="{{ center_name_value }}" maxlength="120" placeholder="{{ center_name_value }}">
+    {% if center_name_custom %}<p class="hint">Maxsus nom o'rnatilgan. Bo'sh qoldirib saqlasangiz — standart nom qaytadi.</p>{% endif %}
+
+    <label>Logotip (PNG, JPG, WEBP yoki SVG — 1 MB gacha)</label>
+    <input type="file" name="logo" accept="image/png,image/jpeg,image/webp,image/svg+xml">
+    <p class="hint">
+      Logotip dastur nomi oldida va brauzer tab ikonkasida ko'rinadi.
+      {% if has_logo %}Hozir maxsus logotip o'rnatilgan.{% else %}Hozir standart "M" belgisi ishlatilmoqda.{% endif %}
+    </p>
+    <div class="actions" style="margin-top:8px">
+      <button>Saqlash</button>
+      {% if has_logo %}
+      <button type="submit" class="outline" formaction="/admin/settings/branding/remove-logo">Logotipni olib tashlash</button>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Admin login va parol</h2>
+  <p class="hint">
+    Panelga kirish uchun. O'zgartirilgach barcha qurilmalarda qayta kirish talab qilinadi.
+    O'zgarish bazada saqlanadi (Railway'dagi eski ADMIN_USER/ADMIN_PASSWORD o'zgaruvchilari endi ishlatilmaydi).
+  </p>
+  <form method="post" action="/admin/settings/credentials">
+    <label>Yangi login</label>
+    <input type="text" name="admin_login" value="{{ admin_login }}" minlength="3" maxlength="60" required>
+    <label>Yangi parol (o'zgartirmaslik uchun bo'sh qoldiring)</label>
+    <input type="password" name="admin_password" minlength="6" maxlength="100" autocomplete="new-password" placeholder="kamida 6 belgi">
+    <label>Joriy parol (tasdiqlash uchun majburiy)</label>
+    <input type="password" name="current_password" required autocomplete="current-password">
+    <div style="margin-top:8px"><button>Saqlash</button></div>
+  </form>
+</div>
 
 <div class="card">
   <form method="post" action="/admin/settings">

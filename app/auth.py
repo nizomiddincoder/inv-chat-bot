@@ -88,11 +88,11 @@ def verify_session(token: str) -> str | None:
 
 
 def check_credentials(login: str, password: str) -> bool:
-    """Constant-time comparison against the env credentials."""
-    expected_login = settings.ADMIN_USER
-    expected_password = settings.ADMIN_PASSWORD
-    if not expected_password:
-        return False  # panel disabled without ADMIN_PASSWORD
-    login_ok = hmac.compare_digest((login or "").encode(), expected_login.encode())
-    password_ok = hmac.compare_digest((password or "").encode(), expected_password.encode())
-    return login_ok and password_ok
+    """Check the admin credentials: DB override (Settings page) first, env fallback.
+
+    Changing the credentials in Settings also rotates the session key, so all
+    existing sessions are invalidated — everyone logs in again. Intentional.
+    """
+    from .services import verify_admin_credentials
+
+    return verify_admin_credentials(login, password)

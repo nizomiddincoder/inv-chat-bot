@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -35,6 +35,7 @@ from ..models import (
     Course,
     Group,
     Lead,
+    Lesson,
     MessageTemplate,
     Payment,
     ReminderLog,
@@ -63,6 +64,8 @@ from ..services import (
     get_ai_text,
     get_all_courses,
     get_audit_log,
+    get_center_name,
+    get_admin_login,
     get_debtors,
     get_employees,
     get_lead_notes,
@@ -72,11 +75,15 @@ from ..services import (
     get_templates,
     get_teachers,
     get_work_hours,
+    get_lesson,
     log_audit,
     monthly_price,
     normalize_phone,
+    post_homework_to_group,
     report_data,
+    save_homework,
     set_ai_text,
+    set_admin_credentials,
     set_setting,
     set_student_status,
     source_label,
@@ -84,6 +91,7 @@ from ..services import (
     student_periods,
     today_overview,
     upsert_manual_lead,
+    WEEKDAY_LABELS,
 )
 
 log = logging.getLogger("admin")
@@ -116,6 +124,8 @@ def _format_sum(amount) -> str:
 
 templates.env.filters["som"] = _format_sum
 templates.env.globals["source_label"] = source_label
+# Branding: the center name is read from the DB on every render (Settings page).
+templates.env.globals["center_name"] = get_center_name
 
 STATUS_LABELS = {
     "new": "Yangi",
@@ -803,11 +813,91 @@ def delete_course(course_id: int, _: None = Depends(check_auth)):
 
 @router.get("/teachers")
 def teachers_page(request: Request, saved: int = 0, _: None = Depends(check_auth)):
+    with SessionLocal() as session:
+        groups = session.query(Group).order_by(Group.name, Group.id).all()
     return templates.TemplateResponse(
         request,
         "teachers.html",
-        {"teachers": get_teachers(), "saved": saved, "active": "teachers"},
+        {
+            "teachers": get_teachers(),
+            "groups": groups,
+            "saved": saved,
+            "active": "teachers",
+        },
     )
+
+
+# ---------------------------------------------------------------------------
+# Lessons & homework (teacher prepares per lesson; the bot posts to the group)
+# ---------------------------------------------------------------------------
+
+@router.get("/lessons")
+def lessons_list(group_id: int, _: None = Depends(check_auth)):
+    """Upcoming lessons of a group (from its schedule) with homework status."""
+    from ..services import upcoming_lesson_dates
+
+    with SessionLocal() as session:
+        group = session.get(Group, group_id)
+        if group is None:
+            return JSONResponse({"ok": False, "error": "Guruh topilmadi"}, status_code=404)
+        lessons = {
+            lesson.lesson_date: lesson
+            for lesson in session.query(Lesson).filter(Lesson.group_id == group_id).all()
+        }
+        group_name = group.name
+        group_chat = group.tg_chat_id
+        schedule = group.schedule or ""
+    today = datetime.now(TZ).date()
+    rows = []
+    for day in upcoming_lesson_dates(schedule, today, 6):
+        lesson = lessons.get(day)
+        rows.append({
+            "date": day.isoformat(),
+            "label": day.strftime("%d.%m") + f" ({WEEKDAY_LABELS[day.weekday()]})",
+            "homework": lesson.homework if lesson else None,
+            "posted": bool(lesson and lesson.posted_at),
+        })
+    return JSONResponse({
+        "ok": True,
+        "group": group_name,
+        "has_chat": bool(group_chat),
+        "schedule": schedule,
+        "lessons": rows,
+    })
+
+
+@router.post("/lessons/save")
+def lesson_save(
+    group_id: int = Form(...),
+    lesson_date: str = Form(...),
+    homework: str = Form(""),
+    user: str = Depends(check_auth),
+):
+    day = _parse_date(lesson_date)
+    if day is None:
+        return JSONResponse({"ok": False, "error": "Sana formati noto'g'ri"}, status_code=400)
+    lesson = save_homework(group_id, day, homework, user)
+    return JSONResponse({"ok": True, "posted": bool(lesson.posted_at)})
+
+
+@router.post("/lessons/send")
+def lesson_send(
+    group_id: int = Form(...),
+    lesson_date: str = Form(...),
+    user: str = Depends(check_auth),
+):
+    """Post the saved homework to the group's Telegram chat."""
+    day = _parse_date(lesson_date)
+    if day is None:
+        return JSONResponse({"ok": False, "error": "Sana formati noto'g'ri"}, status_code=400)
+    lesson = get_lesson(group_id, day)
+    if lesson is None or not lesson.homework:
+        return JSONResponse(
+            {"ok": False, "error": "Avval topshiriq matnini yozib saqlang"},
+            status_code=400,
+        )
+    ok, message = post_homework_to_group(lesson.id, actor=user)
+    return JSONResponse({"ok": ok, "message": message})
 
 
 @router.post("/teachers/add")
@@ -906,11 +996,14 @@ def add_group(
     start_date: str = Form(""),
     starts_on: str = Form(""),
     capacity: int = Form(0),
+    tg_chat_id: str = Form(""),
     _: None = Depends(check_auth),
 ):
     name = name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Group name is required")
+    chat_raw = tg_chat_id.strip()
+    chat_id = int(chat_raw) if chat_raw.lstrip("-").isdigit() else None
     with SessionLocal() as session:
         session.add(
             Group(
@@ -922,6 +1015,7 @@ def add_group(
                 starts_on=_parse_date(starts_on),
                 capacity=capacity or None,
                 status="ochiq",
+                tg_chat_id=chat_id,
                 is_enabled=True,
             )
         )
@@ -941,6 +1035,7 @@ def update_group(
     starts_on: str = Form(""),
     capacity: int = Form(0),
     status: str = Form(""),
+    tg_chat_id: str = Form(""),
     is_enabled: str = Form(""),
     _: None = Depends(check_auth),
 ):
@@ -958,6 +1053,11 @@ def update_group(
             group.capacity = capacity or None
             # Manual close wins; otherwise the auto fill state is recomputed.
             group.status = status if status in GROUP_STATUSES else None
+            chat_raw = tg_chat_id.strip()
+            if chat_raw and chat_raw.lstrip("-").isdigit():
+                group.tg_chat_id = int(chat_raw)
+            else:
+                group.tg_chat_id = None
             group.is_enabled = is_enabled == "on"
             session.commit()
             if group.status != "tugagan":
@@ -1554,7 +1654,7 @@ def _is_staging() -> bool:
 
 
 def _is_admin_login(login: str) -> bool:
-    if login == settings.ADMIN_USER:
+    if login == settings.ADMIN_USER or login == get_admin_login():
         return True
     with SessionLocal() as session:
         from ..models import Employee
@@ -2051,6 +2151,11 @@ def test_ai(request: Request, message: str = Form(...), user: str = Depends(chec
 @router.get("/settings")
 def settings_page(request: Request, saved: int = 0, _: None = Depends(check_auth)):
     start, end = get_work_hours()
+    from ..database import SessionLocal
+    from ..models import AppAsset
+
+    with SessionLocal() as session:
+        has_logo = session.get(AppAsset, "logo") is not None
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -2059,11 +2164,95 @@ def settings_page(request: Request, saved: int = 0, _: None = Depends(check_auth
             "work_end": get_setting("work_end", end.strftime("%H:%M")),
             "owner_chat_id": get_setting("owner_chat_id", ""),
             "reminders_enabled": get_setting("reminders_enabled", "1") == "1",
+            "center_name_value": get_center_name(),
+            "center_name_custom": bool((get_setting("center_name", "") or "").strip()),
+            "admin_login": get_admin_login() or settings.ADMIN_USER,
+            "admin_login_custom": get_admin_login() is not None,
+            "has_logo": has_logo,
             "saved": saved,
             "active": "settings",
             "tz": str(TZ),
         },
     )
+
+
+@router.post("/settings/branding")
+def save_branding(
+    center_name: str = Form(""),
+    logo: UploadFile | None = File(None),
+    user: str = Depends(check_auth),
+):
+    """Center name + logo (used in the sidebar, tab icon and messages)."""
+    name = center_name.strip()[:120]
+    if name:
+        set_setting("center_name", name)
+    else:
+        set_setting("center_name", "")  # fall back to the default name
+
+    if logo is not None and logo.filename:
+        import base64 as _base64
+
+        from ..database import SessionLocal
+        from ..models import AppAsset
+
+        mime = logo.content_type or "image/png"
+        if mime not in ("image/png", "image/jpeg", "image/webp", "image/svg+xml"):
+            raise HTTPException(status_code=400, detail="Faqat PNG, JPG, WEBP yoki SVG rasm yuklang")
+        raw = logo.file.read()
+        if len(raw) > 1_000_000:
+            raise HTTPException(status_code=400, detail="Rasm hajmi 1 MB dan kichik bo'lsin")
+        with SessionLocal() as session:
+            asset = session.get(AppAsset, "logo")
+            if asset is None:
+                asset = AppAsset(key="logo")
+                session.add(asset)
+            asset.mime = mime
+            asset.data = _base64.b64encode(raw).decode("ascii")
+            asset.updated_at = utcnow()
+            session.commit()
+        log_audit(user, "sozlama", 0, "ozgartirildi", "logo", None, "yuklandi")
+    log_audit(user, "sozlama", 0, "ozgartirildi", "center_name", None, name or "(standart)")
+    log.info("Branding saved: name=%r, logo=%s", name, bool(logo and logo.filename))
+    return RedirectResponse(url="/admin/settings?saved=1", status_code=303)
+
+
+@router.post("/settings/branding/remove-logo")
+def remove_logo(user: str = Depends(check_auth)):
+    """Back to the default 'M' mark."""
+    from ..database import SessionLocal
+    from ..models import AppAsset
+
+    with SessionLocal() as session:
+        asset = session.get(AppAsset, "logo")
+        if asset is not None:
+            session.delete(asset)
+            session.commit()
+    log_audit(user, "sozlama", 0, "ozgartirildi", "logo", "yuklandi", None)
+    return RedirectResponse(url="/admin/settings?saved=1", status_code=303)
+
+
+@router.post("/settings/credentials")
+def save_credentials(
+    current_password: str = Form(...),
+    admin_login: str = Form(...),
+    admin_password: str = Form(""),
+    user: str = Depends(check_auth),
+):
+    """Change the admin login/password (the current password is required)."""
+    if not check_credentials(user, current_password):
+        return RedirectResponse(url="/admin/settings?error=creds", status_code=303)
+    login = admin_login.strip()
+    if len(login) < 3:
+        raise HTTPException(status_code=400, detail="Login kamida 3 belgidan iborat bo'lsin")
+    if admin_password and len(admin_password) < 6:
+        raise HTTPException(status_code=400, detail="Parol kamida 6 belgidan iborat bo'lsin")
+    set_admin_credentials(login, admin_password)
+    log_audit(user, "sozlama", 0, "ozgartirildi", "admin_login", None, login)
+    log.info("Admin credentials changed (login=%r) — all sessions invalidated", login)
+    # The session key is derived from the credentials -> everyone re-logs in.
+    response = RedirectResponse(url="/admin/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
 
 
 @router.post("/settings")

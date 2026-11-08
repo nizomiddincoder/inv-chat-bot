@@ -15,6 +15,8 @@
   .t-card .row-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
   .t-card.off { opacity: .55; }
   .disabled-mark { font-size: 12px; color: var(--faint); }
+  .tool-badge { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+  .tool-badge.ok { background: var(--ok-bg); color: var(--ok-text); }
 
   .modal-backdrop {
     position: fixed; inset: 0; z-index: 50;
@@ -53,6 +55,30 @@
     <button type="submit">Qo'shish</button>
   </form>
   <div class="field-error" id="name-error" hidden>O'qituvchi ismini kiriting.</div>
+</div>
+
+<div class="card">
+  <h2>Topshiriqlar (uy vazifasi)</h2>
+  <p class="hint">
+    O'qituvchi guruhni tanlaydi — jadval bo'yicha yaqin dars sanalari chiqadi. Har dars uchun topshiriq
+    oldindan yoziladi yoki dars yakunida kirgiziladi. "Guruhga yuborish" topshiriqni Telegram guruhga tashlaydi
+    (guruh kartochkasida Telegram ID kiritilgan bo'lishi kerak). Ertaga dars bo'lsa, bot o'zi eslatma tashlaydi.
+  </p>
+  <div class="filters" style="margin-bottom:0;padding:10px 12px;">
+    <select id="hw-teacher" aria-label="O'qituvchi bo'yicha filtr">
+      <option value="0">Barcha o'qituvchilar</option>
+      {% for t in teachers %}
+      <option value="{{ t.id }}">{{ t.full_name }}</option>
+      {% endfor %}
+    </select>
+    <select id="hw-group" aria-label="Guruhni tanlash">
+      <option value="0">— guruhni tanlang —</option>
+      {% for g in groups %}
+      <option value="{{ g.id }}" data-teacher="{{ g.teacher_id or 0 }}">{{ g.name }}{% if g.schedule %} · {{ g.schedule }}{% endif %}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div id="hw-list" style="margin-top:12px"><span class="muted">Guruhni tanlang — darslar ro'yxati shu yerda chiqadi.</span></div>
 </div>
 
 {% for teacher in teachers %}
@@ -167,6 +193,111 @@
       nameError.hidden = false;
       nameInput.focus();
     }
+  });
+
+  // --- homework panel: pick a group -> upcoming lessons with textareas ---
+  var hwTeacher = document.getElementById("hw-teacher");
+  var hwGroup = document.getElementById("hw-group");
+  var hwList = document.getElementById("hw-list");
+
+  function hwSave(groupId, date, text, statusEl, done) {
+    var body = new URLSearchParams({ group_id: groupId, lesson_date: date, homework: text });
+    fetch("/admin/lessons/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.ok) { statusEl.textContent = "Saqlandi"; done && done(); }
+      else statusEl.textContent = d.error || "Saqlanmadi";
+    }).catch(function () { statusEl.textContent = "Tarmoq xatosi"; });
+  }
+
+  function hwRender(data) {
+    if (!data.lessons.length) {
+      hwList.innerHTML = '<span class="muted">Bu guruhning jadvalida dars kunlari aniqlanmagan — guruh kartochkasida "Dars kunlari va vaqti" ni belgilang.</span>';
+      return;
+    }
+    var chatNote = data.has_chat
+      ? ""
+      : '<p class="hint" style="margin-top:8px">⚠️ Bu guruhga Telegram ID kiritilmagan — "Guruhga yuborish" ishlashi uchun guruh kartochkasida Telegram guruh ID sini kiriting.</p>';
+    var html = chatNote + '<div style="display:grid;gap:10px;margin-top:6px;">';
+    data.lessons.forEach(function (lesson) {
+      html +=
+        '<div style="border:1px solid var(--border);border-radius:var(--r-md);padding:10px 12px;">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+        '<b>' + lesson.label + '</b>' +
+        (lesson.posted ? '<span class="tool-badge ok">Guruhga yuborilgan</span>' : "") +
+        '<span class="hw-status muted" style="font-size:12px;"></span>' +
+        '<span style="margin-left:auto;display:inline-flex;gap:8px;">' +
+        '<button type="button" class="outline small hw-send" data-date="' + lesson.date + '">Guruhga yuborish</button>' +
+        '</span></div>' +
+        '<textarea class="hw-text" data-date="' + lesson.date + '" rows="2" style="margin-top:8px;min-height:40px;" ' +
+        'placeholder="Masalan: 12-mashq, 45-bet — gaplarni tarjima qiling">' + (lesson.homework || "") + '</textarea>' +
+        '</div>';
+    });
+    hwList.innerHTML = html + "</div>";
+
+    var timers = {};
+    hwList.querySelectorAll(".hw-text").forEach(function (ta) {
+      var date = ta.dataset.date;
+      function statusEl() { return ta.closest("div").querySelector(".hw-status"); }
+      ta.addEventListener("input", function () {
+        clearTimeout(timers[date]);
+        timers[date] = setTimeout(function () {
+          var st = statusEl(); st.textContent = "Saqlanmoqda...";
+          hwSave(hwGroup.value, date, ta.value, st);
+        }, 600);
+      });
+    });
+    hwList.querySelectorAll(".hw-send").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var date = btn.dataset.date;
+        var ta = hwList.querySelector('.hw-text[data-date="' + date + '"]');
+        var st = ta.closest("div").querySelector(".hw-status");
+        st.textContent = "Yuborilmoqda...";
+        // save the current text first, then post to the group
+        hwSave(hwGroup.value, date, ta.value, st, function () {
+          var body = new URLSearchParams({ group_id: hwGroup.value, lesson_date: date });
+          fetch("/admin/lessons/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: body.toString()
+          }).then(function (r) { return r.json(); }).then(function (d) {
+            if (d.ok) {
+              st.textContent = "Yuborildi ✓";
+              btn.disabled = true;
+              showToast(d.message || "Guruhga yuborildi");
+            } else {
+              st.textContent = d.error || "Yuborilmadi";
+              showToast(d.error || "Yuborilmadi");
+            }
+          }).catch(function () { st.textContent = "Tarmoq xatosi"; });
+        });
+      });
+    });
+  }
+
+  function hwLoad() {
+    var groupId = hwGroup.value;
+    if (!groupId || groupId === "0") {
+      hwList.innerHTML = '<span class="muted">Guruhni tanlang — darslar ro\'yxati shu yerda chiqadi.</span>';
+      return;
+    }
+    fetch("/admin/lessons?group_id=" + groupId)
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d.ok) hwRender(d); else hwList.textContent = d.error || "Xatolik"; })
+      .catch(function () { hwList.textContent = "Tarmoq xatosi"; });
+  }
+
+  hwGroup.addEventListener("change", hwLoad);
+  hwTeacher.addEventListener("change", function () {
+    var t = hwTeacher.value;
+    Array.prototype.forEach.call(hwGroup.options, function (opt) {
+      if (!opt.value || opt.value === "0") return;
+      opt.hidden = t !== "0" && opt.dataset.teacher !== t;
+    });
+    if (hwGroup.selectedOptions[0] && hwGroup.selectedOptions[0].hidden) hwGroup.value = "0";
+    hwLoad();
   });
 })();
 </script>
