@@ -362,6 +362,64 @@ assert "[LEAD]" not in r.text, r.text[:400]
 assert "Test Odam" in r.text  # detected lead is displayed
 settings.ANTHROPIC_API_KEY = ""
 print("AI sandbox test window OK")
+
+# --- 8b. CRM: teachers, groups, course details -> Claude knowledge ---
+from app.claude_client import build_system_prompt  # noqa: E402
+from app.models import Course, Group, Teacher  # noqa: E402
+from app.services import build_dynamic_knowledge  # noqa: E402
+
+# add a teacher, attach it to a course with price/duration, open a group
+# (pre-clean leftovers from an earlier crashed run — re-run safe)
+with SessionLocal() as s:
+    s.query(Group).filter(Group.name == "Guruh D").delete(synchronize_session=False)
+    s.query(Course).filter(Course.name == "CRM test kursi").delete(synchronize_session=False)
+    s.query(Teacher).filter(Teacher.full_name == "Nodira Ismoilova").delete(synchronize_session=False)
+    s.commit()
+client.post("/admin/teachers/add", data={"full_name": "Nodira Ismoilova", "phone": "+998901112233", "bio": "7 yillik tajriba, Excel mutaxassisi"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    teacher_id = s.query(Teacher).filter(Teacher.full_name == "Nodira Ismoilova").one().id
+client.post("/admin/courses/add", data={"name": "CRM test kursi", "sort_order": "9", "price": "600 000 so'm/oy", "duration": "4 oy", "description": "Buxgalteriya dasturlari", "teacher_id": str(teacher_id)}, headers=auth, follow_redirects=False)
+client.post("/admin/groups/add", data={"name": "Guruh D", "course_id": "0", "teacher_id": str(teacher_id), "schedule": "Se/Pa 18:00", "start_date": "10-dekabr"}, headers=auth, follow_redirects=False)
+
+with SessionLocal() as s:
+    teacher = s.query(Teacher).filter(Teacher.full_name == "Nodira Ismoilova").one()
+    course = s.query(Course).filter(Course.name == "CRM test kursi").one()
+    assert course.teacher_id == teacher.id and course.price == "600 000 so'm/oy"
+    group = s.query(Group).filter(Group.name == "Guruh D").one()
+    assert group.schedule == "Se/Pa 18:00"
+    # teacher pages render
+    r = client.get("/admin/teachers", headers=auth)
+    assert r.status_code == 200 and "Nodira Ismoilova" in r.text
+    r = client.get("/admin/groups", headers=auth)
+    assert r.status_code == 200 and "Guruh D" in r.text
+
+# dynamic knowledge contains the whole chain: teacher -> course -> group
+knowledge = build_dynamic_knowledge()
+for fragment in ("Nodira Ismoilova", "600 000 so'm/oy", "4 oy", "Guruh D", "Se/Pa 18:00", "10-dekabr"):
+    assert fragment in knowledge, fragment
+prompt = build_system_prompt()
+assert "Nodira Ismoilova" in prompt and "600 000 so'm/oy" in prompt
+print("CRM knowledge -> Claude system prompt OK")
+
+# update a teacher field via the auto-save endpoint and verify it propagates
+client.post(f"/admin/teachers/{teacher.id}/update",
+            data={"full_name": "Nodira Ismoilova", "phone": "+998901112233", "bio": "10 yillik tajriba", "is_enabled": "on"},
+            headers=auth, follow_redirects=False)
+assert "10 yillik tajriba" in build_dynamic_knowledge()
+# disabled course is marked as not-to-offer
+client.post(f"/admin/courses/{course.id}/update",
+            data={"name": "CRM test kursi", "sort_order": "9", "is_enabled": "", "price": "600 000 so'm/oy", "duration": "4 oy", "description": "", "teacher_id": str(teacher.id)},
+            headers=auth, follow_redirects=False)
+assert "hozircha o'chirilgan" in build_dynamic_knowledge()
+print("CRM auto-save endpoints + knowledge update OK")
+
+# cleanup test rows
+client.post(f"/admin/groups/{group.id}/delete", headers=auth, follow_redirects=False)
+client.post(f"/admin/courses/{course.id}/delete", headers=auth, follow_redirects=False)
+client.post(f"/admin/teachers/{teacher.id}/delete", headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    assert s.query(Teacher).filter(Teacher.full_name == "Nodira Ismoilova").count() == 0
+print("teachers/groups CRUD cleanup OK")
 # settings page renders
 r = client.get("/admin/settings", headers=auth)
 assert r.status_code == 200 and "Owner chat ID" in r.text

@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .add-form { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+  .add-form .fld { display: flex; flex-direction: column; gap: 4px; }
+  .add-form .fld label { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .add-form input { width: 190px; max-width: 100%; }
+  .add-form button { align-self: flex-end; }
+  .field-error { color: var(--red); font-size: 12.5px; margin-top: 5px; }
+
+  .t-card { display: grid; grid-template-columns: minmax(160px, 1.2fr) minmax(120px, .8fr) 2fr auto; gap: 12px; align-items: start; }
+  .t-card .fld { display: flex; flex-direction: column; gap: 4px; }
+  .t-card .fld label { margin: 0; font-size: 12px; color: var(--faint); }
+  .t-card textarea { min-height: 52px; }
+  .t-card .row-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+  .t-card.off { opacity: .55; }
+  .disabled-mark { font-size: 12px; color: var(--faint); }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(30, 34, 53, .45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: var(--surface); border-radius: var(--r-lg);
+    box-shadow: var(--sh-md); padding: 22px 24px;
+    max-width: 420px; width: 100%;
+  }
+  .modal p { margin: 8px 0 18px; color: var(--muted); }
+  .modal .actions { justify-content: flex-end; }
+</style>
+
+<h1>O'qituvchilar</h1>
+<p class="page-sub">O'qituvchilar kurslar va guruhlarga bog'lanadi — bot ular haqida javob bera oladi.</p>
+
+<div class="card">
+  <h2>Yangi o'qituvchi</h2>
+  <form method="post" action="/admin/teachers/add" class="add-form" id="add-form" novalidate>
+    <div class="fld">
+      <label for="new-name">F.I.Sh.</label>
+      <input type="text" name="full_name" id="new-name" placeholder="Masalan: Aziz Karimov">
+    </div>
+    <div class="fld">
+      <label for="new-phone">Telefon (ixtiyoriy)</label>
+      <input type="text" name="phone" id="new-phone" placeholder="+998901234567">
+    </div>
+    <div class="fld">
+      <label for="new-bio">Qisqa ma'lumot (ixtiyoriy)</label>
+      <input type="text" name="bio" id="new-bio" placeholder="Tajriba, sertifikatlar...">
+    </div>
+    <button type="submit">Qo'shish</button>
+  </form>
+  <div class="field-error" id="name-error" hidden>O'qituvchi ismini kiriting.</div>
+</div>
+
+{% for teacher in teachers %}
+<div class="card t-card {{ 'off' if not teacher.is_enabled else '' }}" data-id="{{ teacher.id }}">
+  <div class="fld">
+    <label>F.I.Sh.</label>
+    <input type="text" data-f="full_name" value="{{ teacher.full_name }}" data-orig="{{ teacher.full_name }}">
+  </div>
+  <div class="fld">
+    <label>Telefon</label>
+    <input type="text" data-f="phone" value="{{ teacher.phone or '' }}" data-orig="{{ teacher.phone or '' }}" placeholder="+998...">
+  </div>
+  <div class="fld">
+    <label>Qisqa ma'lumot (bot buni biladi)</label>
+    <textarea data-f="bio" data-orig="{{ teacher.bio or '' }}">{{ teacher.bio or '' }}</textarea>
+  </div>
+  <div class="row-actions">
+    <label class="nowrap" style="display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13px;font-weight:500;">
+      <input type="checkbox" data-f="is_enabled" {% if teacher.is_enabled %}checked{% endif %}> Faol
+    </label>
+    <button type="button" class="danger small t-del">O'chirish</button>
+  </div>
+</div>
+{% else %}
+<div class="card"><span class="muted">Hozircha o'qituvchi yo'q — yuqorida qo'shing.</span></div>
+{% endfor %}
+
+<div class="modal-backdrop" id="del-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>O'qituvchini o'chirish</h2>
+    <p>Rostdan o'chirilsinmi? Bu o'qituvchi kurs va guruhlar bog'lovchisidan ham yo'qoladi.</p>
+    <div class="actions">
+      <button type="button" class="outline" id="del-cancel">Bekor qilish</button>
+      <button type="button" class="danger" id="del-confirm">O'chirish</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // --- auto-save each teacher card (500ms debounce) ---
+  var timers = {};
+  function saveCard(card) {
+    var body = new URLSearchParams();
+    card.querySelectorAll("[data-f]").forEach(function (el) {
+      var f = el.dataset.f;
+      var v = el.type === "checkbox" ? (el.checked ? "on" : "") : el.value;
+      body.set(f, v);
+    });
+    fetch("/admin/teachers/" + card.dataset.id + "/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) {
+      if (!r.ok) { showToast("❌ Saqlanmadi"); return; }
+      card.querySelectorAll("[data-orig]").forEach(function (el) { el.dataset.orig = el.value; });
+      card.classList.toggle("off", !card.querySelector("[data-f='is_enabled']").checked);
+      showToast("Saqlandi ✅");
+    }).catch(function () { showToast("❌ Tarmoq xatosi"); });
+  }
+
+  document.querySelectorAll(".t-card").forEach(function (card) {
+    card.addEventListener("change", function (e) {
+      clearTimeout(timers[card.dataset.id]);
+      timers[card.dataset.id] = setTimeout(function () { saveCard(card); }, 500);
+    });
+    card.addEventListener("input", function (e) {
+      clearTimeout(timers[card.dataset.id]);
+      timers[card.dataset.id] = setTimeout(function () { saveCard(card); }, 500);
+    });
+  });
+
+  // --- delete with confirmation ---
+  var modal = document.getElementById("del-modal");
+  var pendingCard = null;
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".t-del");
+    if (!btn) return;
+    pendingCard = btn.closest(".t-card");
+    var name = pendingCard.querySelector("[data-f='full_name']").value;
+    modal.querySelector("p").textContent =
+      "Rostdan o'chirilsinmi? \"" + name + "\" kurs va guruhlar bog'lovchisidan ham yo'qoladi.";
+    modal.hidden = false;
+  });
+  function closeModal() { modal.hidden = true; pendingCard = null; }
+  document.getElementById("del-cancel").addEventListener("click", closeModal);
+  modal.addEventListener("click", function (e) { if (e.target === modal) closeModal(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
+  document.getElementById("del-confirm").addEventListener("click", function () {
+    if (!pendingCard) return;
+    var card = pendingCard;
+    fetch("/admin/teachers/" + card.dataset.id + "/delete", { method: "POST" })
+      .then(function (r) {
+        if (!r.ok) { showToast("❌ O'chirilmadi"); closeModal(); return; }
+        card.remove();
+        closeModal();
+        showToast("O'qituvchi o'chirildi ✅");
+      })
+      .catch(function () { showToast("❌ Tarmoq xatosi"); closeModal(); });
+  });
+
+  // --- add form: require a name ---
+  var addForm = document.getElementById("add-form");
+  var nameInput = document.getElementById("new-name");
+  var nameError = document.getElementById("name-error");
+  nameInput.addEventListener("input", function () { nameError.hidden = true; });
+  addForm.addEventListener("submit", function (e) {
+    if (!nameInput.value.trim()) {
+      e.preventDefault();
+      nameError.hidden = false;
+      nameInput.focus();
+    }
+  });
+})();
+</script>
+{% endblock %}

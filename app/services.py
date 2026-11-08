@@ -16,9 +16,11 @@ from .models import (
     ChatState,
     ChatHistory,
     Course,
+    Group,
     Lead,
     ProcessedUpdate,
     Setting,
+    Teacher,
     utcnow,
 )
 
@@ -276,6 +278,91 @@ def get_enabled_courses() -> list[Course]:
 def get_all_courses() -> list[Course]:
     with SessionLocal() as session:
         return session.query(Course).order_by(Course.sort_order, Course.id).all()
+
+
+# ---------------------------------------------------------------------------
+# Teachers and groups (CRM -> Claude knowledge)
+# ---------------------------------------------------------------------------
+
+def get_teachers(enabled_only: bool = False) -> list[Teacher]:
+    with SessionLocal() as session:
+        query = session.query(Teacher).order_by(Teacher.full_name, Teacher.id)
+        if enabled_only:
+            query = query.filter(Teacher.is_enabled.is_(True))
+        return query.all()
+
+
+def get_all_groups() -> list[Group]:
+    with SessionLocal() as session:
+        return session.query(Group).order_by(Group.id).all()
+
+
+def build_dynamic_knowledge() -> str:
+    """Build the CRM knowledge block for Claude from the database.
+
+    Courses (price, duration, teacher, description), teachers (bio) and
+    groups (schedule, start date) are joined into one markdown text, so
+    every newly opened course is instantly known to the bot — no redeploy.
+    """
+    with SessionLocal() as session:
+        courses = session.query(Course).order_by(Course.sort_order, Course.id).all()
+        teachers = {t.id: t for t in session.query(Teacher).all()}
+        groups = session.query(Group).order_by(Group.id).all()
+
+    teacher_name = lambda tid: (  # noqa: E731
+        teachers[tid].full_name if tid in teachers else None
+    )
+
+    lines: list[str] = []
+    if courses:
+        lines.append("### Kurslar (markaz bazasidan, eng yangi ma'lumot)")
+        for course in courses:
+            parts = [f"**{course.name}**"]
+            if course.teacher_id:
+                tname = teacher_name(course.teacher_id)
+                if tname:
+                    parts.append(f"o'qituvchi: {tname}")
+            if course.price:
+                parts.append(f"narx: {course.price}")
+            if course.duration:
+                parts.append(f"davomiylik: {course.duration}")
+            line = " — ".join(parts)
+            if course.description:
+                line += f"\n  {course.description.strip()}"
+            if not course.is_enabled:
+                line += "\n  (hozircha o'chirilgan — yangi o'quvchilarni taklif qilmang)"
+            lines.append(f"- {line}")
+    if teachers:
+        lines.append("### O'qituvchilar")
+        for teacher in teachers.values():
+            if not teacher.is_enabled:
+                continue
+            info = f"- **{teacher.full_name}**"
+            if teacher.phone:
+                info += f" (tel: {teacher.phone})"
+            if teacher.bio:
+                info += f" — {teacher.bio.strip()}"
+            lines.append(info)
+    if groups:
+        lines.append("### Guruhlar")
+        for group in groups:
+            if not group.is_enabled:
+                continue
+            parts = [f"**{group.name}**"]
+            if group.course_id:
+                course = next((c for c in courses if c.id == group.course_id), None)
+                if course:
+                    parts.append(f"kurs: {course.name}")
+            if group.teacher_id:
+                tname = teacher_name(group.teacher_id)
+                if tname:
+                    parts.append(f"o'qituvchi: {tname}")
+            if group.schedule:
+                parts.append(f"jadval: {group.schedule}")
+            if group.start_date:
+                parts.append(f"boshlanish: {group.start_date}")
+            lines.append(f"- {' — '.join(parts)}")
+    return "\n".join(lines).strip()
 
 
 def match_course(text: str, courses: list[Course]) -> Course | None:

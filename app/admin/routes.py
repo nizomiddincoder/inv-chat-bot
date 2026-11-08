@@ -16,13 +16,15 @@ from fastapi.templating import Jinja2Templates
 from .. import claude_client
 from ..config import settings
 from ..database import SessionLocal
-from ..models import Course, Lead
+from ..models import Course, Group, Lead, Teacher
 from ..services import (
     AI_KNOWLEDGE_KEY,
     AI_STYLE_KEY,
     TZ,
     get_ai_text,
+    get_all_courses,
     get_setting,
+    get_teachers,
     get_work_hours,
     set_ai_text,
     set_setting,
@@ -273,7 +275,12 @@ def courses_page(request: Request, saved: int = 0, _: None = Depends(check_auth)
     return templates.TemplateResponse(
         request,
         "courses.html",
-        {"courses": courses, "saved": saved, "active": "courses"},
+        {
+            "courses": courses,
+            "teachers": get_teachers(),
+            "saved": saved,
+            "active": "courses",
+        },
     )
 
 
@@ -281,6 +288,10 @@ def courses_page(request: Request, saved: int = 0, _: None = Depends(check_auth)
 def add_course(
     name: str = Form(...),
     sort_order: int = Form(0),
+    price: str = Form(""),
+    duration: str = Form(""),
+    description: str = Form(""),
+    teacher_id: int = Form(0),
     _: None = Depends(check_auth),
 ):
     name = name.strip()
@@ -289,7 +300,17 @@ def add_course(
     with SessionLocal() as session:
         exists = session.query(Course).filter(Course.name == name).first()
         if not exists:
-            session.add(Course(name=name, sort_order=sort_order, is_enabled=True))
+            session.add(
+                Course(
+                    name=name,
+                    sort_order=sort_order,
+                    is_enabled=True,
+                    price=price.strip() or None,
+                    duration=duration.strip() or None,
+                    description=description.strip() or None,
+                    teacher_id=teacher_id or None,
+                )
+            )
             session.commit()
             log.info("Course added: %s", name)
     return RedirectResponse(url="/admin/courses?saved=1", status_code=303)
@@ -301,6 +322,10 @@ def update_course(
     name: str = Form(...),
     sort_order: int = Form(0),
     is_enabled: str = Form(""),
+    price: str = Form(""),
+    duration: str = Form(""),
+    description: str = Form(""),
+    teacher_id: int = Form(0),
     _: None = Depends(check_auth),
 ):
     with SessionLocal() as session:
@@ -309,6 +334,10 @@ def update_course(
             course.name = name.strip() or course.name
             course.sort_order = sort_order
             course.is_enabled = is_enabled == "on"  # checkbox: present = "on"
+            course.price = price.strip() or None
+            course.duration = duration.strip() or None
+            course.description = description.strip() or None
+            course.teacher_id = teacher_id or None
             session.commit()
             log.info("Course updated: id=%s name=%s enabled=%s", course_id, course.name, course.is_enabled)
     return RedirectResponse(url="/admin/courses?saved=1", status_code=303)
@@ -323,6 +352,160 @@ def delete_course(course_id: int, _: None = Depends(check_auth)):
             session.commit()
             log.info("Course deleted: id=%s name=%s", course_id, course.name)
     return RedirectResponse(url="/admin/courses?saved=1", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Teachers (CRM -> Claude knowledge)
+# ---------------------------------------------------------------------------
+
+@router.get("/teachers")
+def teachers_page(request: Request, saved: int = 0, _: None = Depends(check_auth)):
+    return templates.TemplateResponse(
+        request,
+        "teachers.html",
+        {"teachers": get_teachers(), "saved": saved, "active": "teachers"},
+    )
+
+
+@router.post("/teachers/add")
+def add_teacher(
+    full_name: str = Form(...),
+    phone: str = Form(""),
+    bio: str = Form(""),
+    _: None = Depends(check_auth),
+):
+    full_name = full_name.strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Teacher name is required")
+    with SessionLocal() as session:
+        session.add(
+            Teacher(
+                full_name=full_name,
+                phone=phone.strip() or None,
+                bio=bio.strip() or None,
+                is_enabled=True,
+            )
+        )
+        session.commit()
+        log.info("Teacher added: %s", full_name)
+    return RedirectResponse(url="/admin/teachers?saved=1", status_code=303)
+
+
+@router.post("/teachers/{teacher_id}/update")
+def update_teacher(
+    teacher_id: int,
+    full_name: str = Form(...),
+    phone: str = Form(""),
+    bio: str = Form(""),
+    is_enabled: str = Form(""),
+    _: None = Depends(check_auth),
+):
+    with SessionLocal() as session:
+        teacher = session.get(Teacher, teacher_id)
+        if teacher:
+            teacher.full_name = full_name.strip() or teacher.full_name
+            teacher.phone = phone.strip() or None
+            teacher.bio = bio.strip() or None
+            teacher.is_enabled = is_enabled == "on"
+            session.commit()
+            log.info("Teacher updated: id=%s name=%s", teacher_id, teacher.full_name)
+    return RedirectResponse(url="/admin/teachers?saved=1", status_code=303)
+
+
+@router.post("/teachers/{teacher_id}/delete")
+def delete_teacher(teacher_id: int, _: None = Depends(check_auth)):
+    with SessionLocal() as session:
+        teacher = session.get(Teacher, teacher_id)
+        if teacher:
+            session.delete(teacher)
+            session.commit()
+            log.info("Teacher deleted: id=%s name=%s", teacher_id, teacher.full_name)
+    return RedirectResponse(url="/admin/teachers?saved=1", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Groups (CRM -> Claude knowledge)
+# ---------------------------------------------------------------------------
+
+@router.get("/groups")
+def groups_page(request: Request, saved: int = 0, _: None = Depends(check_auth)):
+    with SessionLocal() as session:
+        groups = session.query(Group).order_by(Group.id).all()
+    return templates.TemplateResponse(
+        request,
+        "groups.html",
+        {
+            "groups": groups,
+            "courses": get_all_courses(),
+            "teachers": get_teachers(),
+            "saved": saved,
+            "active": "groups",
+        },
+    )
+
+
+@router.post("/groups/add")
+def add_group(
+    name: str = Form(...),
+    course_id: int = Form(0),
+    teacher_id: int = Form(0),
+    schedule: str = Form(""),
+    start_date: str = Form(""),
+    _: None = Depends(check_auth),
+):
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Group name is required")
+    with SessionLocal() as session:
+        session.add(
+            Group(
+                name=name,
+                course_id=course_id or None,
+                teacher_id=teacher_id or None,
+                schedule=schedule.strip() or None,
+                start_date=start_date.strip() or None,
+                is_enabled=True,
+            )
+        )
+        session.commit()
+        log.info("Group added: %s", name)
+    return RedirectResponse(url="/admin/groups?saved=1", status_code=303)
+
+
+@router.post("/groups/{group_id}/update")
+def update_group(
+    group_id: int,
+    name: str = Form(...),
+    course_id: int = Form(0),
+    teacher_id: int = Form(0),
+    schedule: str = Form(""),
+    start_date: str = Form(""),
+    is_enabled: str = Form(""),
+    _: None = Depends(check_auth),
+):
+    with SessionLocal() as session:
+        group = session.get(Group, group_id)
+        if group:
+            group.name = name.strip() or group.name
+            group.course_id = course_id or None
+            group.teacher_id = teacher_id or None
+            group.schedule = schedule.strip() or None
+            group.start_date = start_date.strip() or None
+            group.is_enabled = is_enabled == "on"
+            session.commit()
+            log.info("Group updated: id=%s name=%s", group_id, group.name)
+    return RedirectResponse(url="/admin/groups?saved=1", status_code=303)
+
+
+@router.post("/groups/{group_id}/delete")
+def delete_group(group_id: int, _: None = Depends(check_auth)):
+    with SessionLocal() as session:
+        group = session.get(Group, group_id)
+        if group:
+            session.delete(group)
+            session.commit()
+            log.info("Group deleted: id=%s name=%s", group_id, group.name)
+    return RedirectResponse(url="/admin/groups?saved=1", status_code=303)
 
 
 # ---------------------------------------------------------------------------

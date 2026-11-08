@@ -18,7 +18,7 @@ from sqlalchemy import func
 from . import claude_client
 from . import telegram_client as tg
 from .database import SessionLocal
-from .models import BusinessConnectionRecord, Course, Lead, utcnow
+from .models import BusinessConnectionRecord, Course, Lead, Teacher, utcnow
 from .services import (
     TZ,
     add_history,
@@ -465,13 +465,24 @@ def _build_leads_summary() -> str:
 
 
 def _build_courses_summary() -> str:
-    """Course list for the /kurslar command."""
+    """Course list for the /kurslar command (with price, duration, teacher)."""
     with SessionLocal() as session:
         courses = session.query(Course).order_by(Course.sort_order, Course.id).all()
+        teachers = {t.id: t.full_name for t in session.query(Teacher).all()}
     lines = ["📚 Kurslar:"]
     for course in courses:
-        mark = "✅" if course.is_enabled else "⛔ (o'chirilgan)"
-        lines.append(f"{mark} {course.name}")
+        mark = "✅" if course.is_enabled else "⛔"
+        details = []
+        if course.price:
+            details.append(f"narx: {course.price}")
+        if course.duration:
+            details.append(f"muddat: {course.duration}")
+        if course.teacher_id and course.teacher_id in teachers:
+            details.append(f"o'qituvchi: {teachers[course.teacher_id]}")
+        line = f"{mark} {course.name}"
+        if details:
+            line += " — " + ", ".join(details)
+        lines.append(line)
     if not courses:
         lines.append("Hozircha kurs yo'q. Admin panelda qo'shing.")
     return "\n".join(lines)

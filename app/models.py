@@ -12,6 +12,20 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Teacher(Base):
+    """A teacher who can be attached to courses and groups."""
+
+    __tablename__ = "teachers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(120))
+    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Short professional bio (experience, certificates) — also shown to Claude.
+    bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Course(Base):
     """A course the bot offers. Buttons in the bot are built from this table."""
 
@@ -21,6 +35,27 @@ class Course(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # CRM details (also fed to Claude as knowledge):
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    price: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    duration: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Group(Base):
+    """A study group: one course, one teacher, a schedule and a start date."""
+
+    __tablename__ = "groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    course_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Free-text schedule like "Du/Chu/Ju 16:00" and start date "1-dekabr".
+    schedule: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    start_date: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

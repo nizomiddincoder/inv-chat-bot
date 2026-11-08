@@ -62,8 +62,35 @@ def _seed_defaults() -> None:
         session.commit()
 
 
+def _migrate_schema() -> None:
+    """Add columns to existing tables that create_all won't touch.
+
+    create_all only creates MISSING tables — columns added to Course later
+    (price, duration, teacher_id, description) must be added manually, or
+    existing deployments (Railway PostgreSQL) would crash on the new fields.
+    Simple ALTER TABLE ADD COLUMN works on both PostgreSQL and SQLite.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "courses" not in inspector.get_table_names():
+        return  # first start — create_all builds the full table anyway
+    existing = {col["name"] for col in inspector.get_columns("courses")}
+    additions = {
+        "description": "TEXT",
+        "price": "VARCHAR(60)",
+        "duration": "VARCHAR(60)",
+        "teacher_id": "INTEGER",
+    }
+    with engine.begin() as conn:
+        for column, col_type in additions.items():
+            if column not in existing:
+                conn.execute(text(f"ALTER TABLE courses ADD COLUMN {column} {col_type}"))
+                log.info("Migration: added courses.%s column", column)
+
+
 def init_db() -> None:
-    """Create all tables (if missing) and seed defaults. Runs on startup."""
+    """Create all tables (if missing), migrate and seed defaults. Runs on startup."""
     from . import models  # noqa: F401  (models must be imported to be registered)
 
     log.info(
@@ -73,6 +100,7 @@ def init_db() -> None:
     )
     try:
         Base.metadata.create_all(engine)
+        _migrate_schema()
     except Exception:
         # Log the full error so the owner can see the exact problem in Railway logs.
         log.exception(

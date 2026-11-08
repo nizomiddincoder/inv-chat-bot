@@ -121,10 +121,12 @@ and soft shadows, a left sidebar navigation, and color-coded statuses
 
 | Page | What it does |
 |------|--------------|
-| **Kanban** *(main page)* | CRM board: every lead is a card, columns are pipeline stages (Yangi → Aloqaga chiqildi → O'qishga yozildi / Rad etildi). **Drag & drop** a card to move the lead to the next stage — saved instantly. Counts per column + today's leads at the top; a small select on each card works as a drag-free fallback (touch screens). |
-| **Lidlar** | All leads. Filter by course/status, search by name or phone, change status, add notes, download CSV (opens in Excel). |
-| **Kurslar** | Add / edit / delete / enable / disable courses. Changes the bot's buttons **immediately**. |
-| **AI Javoblar** | Tune Claude's answer style (professional prompt) + extra knowledge + a **sandbox test window** to preview answers without sending anything. See the section below. |
+| **Kanban** *(main page)* | CRM board: every lead is a card, columns are pipeline stages (Yangi → Aloqaga chiqildi → O'qishga yozildi / Rad etildi). **Drag & drop** a card to move the lead to the next stage — saved instantly. Counts per column + today's leads at the top. |
+| **Lidlar** | All leads. Filter by course/status, search by name or phone, auto-saved status and notes, download CSV (opens in Excel). |
+| **Guruhlar** | Open study groups: name + course + teacher + schedule + start date. Auto-saved, and the bot instantly knows the new group. |
+| **Kurslar** | Courses as cards: name, **price, duration, teacher**, description, order, on/off. Auto-saved; bot buttons and Claude knowledge update immediately. |
+| **O'qituvchilar** | Teachers with phone and a short bio, linked to courses/groups. Fed to Claude so the bot can introduce them. |
+| **AI Javoblar** | Tune Claude's answer style (professional prompt) + extra knowledge + a **sandbox test window** to preview answers without sending anything. |
 | **Sozlamalar** | Working hours (e.g. 09:00–20:00, Tashkent time) and Owner chat ID. |
 
 Outside working hours the bot adds: *"Hozir ish vaqtimiz tugagan, ertaga javob beramiz."*
@@ -163,6 +165,13 @@ With `ANTHROPIC_API_KEY` set, **every business message is answered by Claude**
   put into the system prompt. Edit the files (or add new ones) at any time;
   the bot re-reads them on every message, **no redeploy needed**. Start with
   `knowledge/markaz-haqida.md` and replace the `[TO'LDIRING]` placeholders.
+- **Live CRM knowledge:** courses (price, duration, **teacher**, description),
+  teachers (bio) and groups (schedule, start date) from the admin panel are
+  rebuilt into the system prompt **on every message**. Open a new course in
+  **Kurslar**, attach a teacher from **O'qituvchilar**, create a group in
+  **Guruhlar** — and the bot can immediately answer "who teaches it, how much,
+  when does it start". Disabled courses are marked so the bot does not offer
+  them.
 - **Answer style** is tuned in the admin panel → **AI Javoblar** page: an
   editable professional style prompt (tone, length, formality, forbidden
   phrases) plus an "extra knowledge" box for quick facts. Clearing the style

@@ -14,7 +14,7 @@ from pathlib import Path
 import httpx
 
 from .config import settings
-from .services import AI_KNOWLEDGE_KEY, AI_STYLE_KEY, get_ai_text
+from .services import AI_KNOWLEDGE_KEY, AI_STYLE_KEY, build_dynamic_knowledge, get_ai_text
 
 log = logging.getLogger("bot.claude")
 
@@ -106,22 +106,30 @@ def knowledge_file_count() -> int:
 
 
 def build_system_prompt() -> str:
-    """System prompt: role + knowledge (files + admin extra) + answer style.
+    """System prompt: role + knowledge (files + CRM DB + admin extra) + style.
 
-    The style block comes from the admin panel (AI Javoblar page) and decides
-    how professional the answers sound. The [LEAD] rules are fixed in code so
-    lead collection can never break by editing the panel.
+    Knowledge comes from three sources, all merged into one block:
+      1. knowledge/ folder files (edited by the owner);
+      2. the live CRM database — courses (price, duration, teacher), teachers
+         and groups (schedule) — rebuilt on every message, so a newly opened
+         course is known to the bot immediately, without a redeploy;
+      3. the "extra knowledge" box from the admin panel (AI Javoblar page).
+    The [LEAD] rules are fixed in code so lead collection can never break.
     """
     docs = load_knowledge()
     extra = (get_ai_text(AI_KNOWLEDGE_KEY) or "").strip()
+    crm = build_dynamic_knowledge()
     knowledge_blocks = [f"### {name}\n{content}" for name, content in docs if content]
+    if crm:
+        knowledge_blocks.append(crm)
     if extra:
         knowledge_blocks.append(f"### Qo'shimcha ma'lumot (admin paneldan)\n{extra}")
     if knowledge_blocks:
         knowledge = "\n\n".join(knowledge_blocks)
         knowledge_note = (
             "Quyidagi bilimlarga asoslanib javob ber "
-            "(bu — markazning rasmiy ma'lumotlari):"
+            "(bu — markazning rasmiy ma'lumotlari; kurslar, narxlar, o'qituvchilar "
+            "va guruhlar jadvali markaz bazasidan olingan eng yangi ma'lumot):"
         )
     else:
         knowledge = "(bilim fayllari topilmadi)"

@@ -1,17 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  /* add-form: labels above inputs, all controls on one row, same height */
+  /* add form: labels above inputs, one row, same height */
   .add-form { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
   .add-form .fld { display: flex; flex-direction: column; gap: 4px; }
   .add-form .fld label { margin: 0; font-size: 12.5px; color: var(--muted); }
   .add-form button { align-self: flex-end; }
   .field-error { color: var(--red); font-size: 12.5px; margin-top: 5px; }
 
-  .c-name { width: 240px; max-width: 100%; }
-  .c-sort { width: 74px; }
+  /* course card grid */
+  .c-card { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(110px, .8fr) minmax(100px, .7fr) minmax(150px, 1fr) minmax(90px, .6fr) auto; gap: 12px; align-items: start; }
+  .c-card .fld { display: flex; flex-direction: column; gap: 4px; }
+  .c-card .fld label { margin: 0; font-size: 12px; color: var(--faint); }
+  .c-card .row-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+  .c-card.off { opacity: .55; }
+  .c-desc { grid-column: 1 / -1; }
+  .c-desc textarea { min-height: 46px; }
+  @media (max-width: 900px) {
+    .c-card { grid-template-columns: 1fr 1fr; }
+    .c-card .row-actions { justify-content: flex-start; }
+  }
 
-  /* confirm modal */
   .modal-backdrop {
     position: fixed; inset: 0; z-index: 50;
     background: rgba(30, 34, 53, .45);
@@ -22,14 +31,14 @@
   .modal {
     background: var(--surface); border-radius: var(--r-lg);
     box-shadow: var(--sh-md); padding: 22px 24px;
-    max-width: 420px; width: 100%;
+    max-width: 440px; width: 100%;
   }
   .modal p { margin: 8px 0 18px; color: var(--muted); }
   .modal .actions { justify-content: flex-end; }
 </style>
 
 <h1>Kurslar</h1>
-<p class="page-sub">O'zgarishlar avtomatik saqlanadi — botdagi tugmalar darhol yangilanadi.</p>
+<p class="page-sub">Narx, muddat va o'qituvchi — barchasi botga avtomatik ma'lum bo'ladi (Claude'ga uzatiladi).</p>
 
 <div class="card">
   <h2>Yangi kurs qo'shish</h2>
@@ -39,43 +48,78 @@
       <input type="text" name="name" id="new-name" placeholder="Masalan: Frontend dasturlash">
     </div>
     <div class="fld">
+      <label for="new-price">Narx</label>
+      <input type="text" name="price" id="new-price" placeholder="500 000 so'm/oy">
+    </div>
+    <div class="fld">
+      <label for="new-duration">Muddat</label>
+      <input type="text" name="duration" id="new-duration" placeholder="3 oy">
+    </div>
+    <div class="fld">
+      <label for="new-teacher">O'qituvchi</label>
+      <select name="teacher_id" id="new-teacher">
+        <option value="0">— tanlanmagan —</option>
+        {% for t in teachers %}
+        <option value="{{ t.id }}">{{ t.full_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="fld">
       <label for="new-sort">Tartib</label>
       <input type="number" name="sort_order" id="new-sort" value="0" title="Ro'yxatdagi joyi (kichik raqam — yuqorida)">
     </div>
     <button type="submit">Qo'shish</button>
   </form>
   <div class="field-error" id="name-error" hidden>Kurs nomini kiriting — bo'sh nom bilan qo'shib bo'lmaydi.</div>
-  <p class="hint">Yoqilgan kurslar botdagi tugmalarda darhol paydo bo'ladi. "Tartib" — ro'yxatdagi joyi (kichik raqam yuqorida turadi).</p>
+  <p class="hint">Yoqilgan kurslar botdagi tugmalarda darhol paydo bo'ladi. Narx/muddat/o'qituvchini kurs kartasida keyin ham to'ldirishingiz mumkin.</p>
 </div>
 
-<div class="table-wrap">
-<table>
-  <thead>
-    <tr><th>Nomi</th><th>Tartib</th><th>Yoqilgan</th><th>Amallar</th></tr>
-  </thead>
-  <tbody id="course-rows">
-  {% for course in courses %}
-    <tr data-id="{{ course.id }}">
-      <td><input type="text" class="c-name" value="{{ course.name }}" data-orig="{{ course.name }}" aria-label="Kurs nomi"></td>
-      <td><input type="number" class="c-sort" value="{{ course.sort_order }}" data-orig="{{ course.sort_order }}" aria-label="Tartib"></td>
-      <td><input type="checkbox" class="c-en" {% if course.is_enabled %}checked{% endif %} aria-label="Yoqilgan"></td>
-      <td class="nowrap">
-        <div class="actions">
-          <button type="button" class="danger small c-del">O'chirish</button>
-        </div>
-      </td>
-    </tr>
-  {% else %}
-    <tr><td colspan="4" class="muted">Hozircha kurs yo'q.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+{% for course in courses %}
+{% set c_teacher = (teachers | selectattr('id', 'equalto', course.teacher_id) | list | first) if course.teacher_id else none %}
+<div class="card c-card {{ 'off' if not course.is_enabled else '' }}" data-id="{{ course.id }}">
+  <div class="fld">
+    <label>Kurs nomi</label>
+    <input type="text" data-f="name" value="{{ course.name }}" data-orig="{{ course.name }}">
+  </div>
+  <div class="fld">
+    <label>Narx</label>
+    <input type="text" data-f="price" value="{{ course.price or '' }}" data-orig="{{ course.price or '' }}" placeholder="500 000 so'm/oy">
+  </div>
+  <div class="fld">
+    <label>Muddat</label>
+    <input type="text" data-f="duration" value="{{ course.duration or '' }}" data-orig="{{ course.duration or '' }}" placeholder="3 oy">
+  </div>
+  <div class="fld">
+    <label>O'qituvchi</label>
+    <select data-f="teacher_id" data-orig="{{ course.teacher_id or 0 }}">
+      <option value="0">— tanlanmagan —</option>
+      {% for t in teachers %}
+      <option value="{{ t.id }}" {{ 'selected' if course.teacher_id == t.id else '' }}>{{ t.full_name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fld">
+    <label>Tartib</label>
+    <input type="number" data-f="sort_order" value="{{ course.sort_order }}" data-orig="{{ course.sort_order }}">
+  </div>
+  <div class="row-actions">
+    <label class="nowrap" style="display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13px;font-weight:500;">
+      <input type="checkbox" data-f="is_enabled" {% if course.is_enabled %}checked{% endif %}> Yoqilgan
+    </label>
+    <button type="button" class="danger small c-del">O'chirish</button>
+  </div>
+  <div class="fld c-desc">
+    <label>Tavsif (bot mijozga shu bo'yicha javob beradi)</label>
+    <textarea data-f="description" data-orig="{{ course.description or '' }}">{{ course.description or '' }}</textarea>
+  </div>
 </div>
+{% else %}
+<div class="card"><span class="muted">Hozircha kurs yo'q — yuqorida qo'shing.</span></div>
+{% endfor %}
 
-<!-- delete confirmation -->
 <div class="modal-backdrop" id="del-modal" hidden>
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="del-title">
-    <h2 id="del-title">Kursni o'chirish</h2>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Kursni o'chirish</h2>
     <p>Rostdan o'chirilsinmi? Bu kursga bog'liq botdagi tugma ham o'chadi.</p>
     <div class="actions">
       <button type="button" class="outline" id="del-cancel">Bekor qilish</button>
@@ -86,79 +130,73 @@
 
 <script>
 (function () {
-  var tbody = document.getElementById("course-rows");
-
-  // --- auto-save a row (500ms debounce), then re-sort by "Tartib" ---
+  // --- auto-save a course card (500ms debounce), then re-sort by "Tartib" ---
   var timers = {};
-  function saveRow(row) {
-    var id = row.dataset.id;
-    var name = row.querySelector(".c-name").value.trim();
-    var sort = row.querySelector(".c-sort").value || "0";
-    var en = row.querySelector(".c-en").checked;
-    var body = new URLSearchParams({
-      name: name, sort_order: sort,
-      is_enabled: en ? "on" : ""
+  function saveCard(card) {
+    var name = card.querySelector("[data-f='name']").value.trim();
+    if (!name) { showToast("❌ Kurs nomi bo'sh bo'lishi mumkin emas"); return; }
+    var body = new URLSearchParams();
+    card.querySelectorAll("[data-f]").forEach(function (el) {
+      var f = el.dataset.f;
+      var v = el.type === "checkbox" ? (el.checked ? "on" : "") : el.value;
+      body.set(f, v);
     });
-    fetch("/admin/courses/" + id + "/update", {
+    fetch("/admin/courses/" + card.dataset.id + "/update", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString()
     }).then(function (r) {
       if (!r.ok) { showToast("❌ Saqlanmadi"); return; }
-      row.querySelectorAll("[data-orig]").forEach(function (el) { el.dataset.orig = el.value; });
+      card.querySelectorAll("[data-orig]").forEach(function (el) { el.dataset.orig = el.value; });
+      card.classList.toggle("off", !card.querySelector("[data-f='is_enabled']").checked);
       showToast("Saqlandi ✅");
-      sortRows();
+      sortCards();
     }).catch(function () { showToast("❌ Tarmoq xatosi"); });
   }
 
-  function sortRows() {
-    var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr[data-id]"));
-    rows.sort(function (a, b) {
-      return (parseInt(a.querySelector(".c-sort").value, 10) || 0)
-           - (parseInt(b.querySelector(".c-sort").value, 10) || 0);
+  function sortCards() {
+    var container = document.querySelector("main") || document.body;
+    var cards = Array.prototype.slice.call(container.querySelectorAll(".c-card"));
+    cards.sort(function (a, b) {
+      return (parseInt(a.querySelector("[data-f='sort_order']").value, 10) || 0)
+           - (parseInt(b.querySelector("[data-f='sort_order']").value, 10) || 0);
     });
-    rows.forEach(function (r) { tbody.appendChild(r); });
+    var anchor = document.querySelector("#del-modal");
+    cards.forEach(function (c) { document.body.insertBefore(c, anchor); });
   }
 
-  tbody.addEventListener("change", function (e) {
-    var row = e.target.closest("tr[data-id]");
-    if (!row) return;
-    var field = e.target;
-    if (field.classList.contains("c-name") && !field.value.trim()) {
-      showToast("❌ Kurs nomi bo'sh bo'lishi mumkin emas");
-      field.value = field.dataset.orig;
-      return;
-    }
-    clearTimeout(timers[row.dataset.id]);
-    timers[row.dataset.id] = setTimeout(function () { saveRow(row); }, 500);
+  document.querySelectorAll(".c-card").forEach(function (card) {
+    ["change", "input"].forEach(function (evt) {
+      card.addEventListener(evt, function () {
+        clearTimeout(timers[card.dataset.id]);
+        timers[card.dataset.id] = setTimeout(function () { saveCard(card); }, 500);
+      });
+    });
   });
 
-  // --- delete: custom confirm modal, then fetch + remove row ---
+  // --- delete with confirmation ---
   var modal = document.getElementById("del-modal");
-  var pendingRow = null;
-
-  tbody.addEventListener("click", function (e) {
+  var pendingCard = null;
+  document.addEventListener("click", function (e) {
     var btn = e.target.closest(".c-del");
     if (!btn) return;
-    pendingRow = btn.closest("tr[data-id]");
-    var name = pendingRow.querySelector(".c-name").value;
+    pendingCard = btn.closest(".c-card");
+    var name = pendingCard.querySelector("[data-f='name']").value;
     modal.querySelector("p").textContent =
       'Rostdan o\'chirilsinmi? "' + name + '" kursiga bog\'liq botdagi tugma ham o\'chadi.';
     modal.hidden = false;
   });
-
-  function closeModal() { modal.hidden = true; pendingRow = null; }
+  function closeModal() { modal.hidden = true; pendingCard = null; }
   document.getElementById("del-cancel").addEventListener("click", closeModal);
   modal.addEventListener("click", function (e) { if (e.target === modal) closeModal(); });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
-
   document.getElementById("del-confirm").addEventListener("click", function () {
-    if (!pendingRow) return;
-    var row = pendingRow;
-    fetch("/admin/courses/" + row.dataset.id + "/delete", { method: "POST" })
+    if (!pendingCard) return;
+    var card = pendingCard;
+    fetch("/admin/courses/" + card.dataset.id + "/delete", { method: "POST" })
       .then(function (r) {
         if (!r.ok) { showToast("❌ O'chirilmadi"); closeModal(); return; }
-        row.remove();
+        card.remove();
         closeModal();
         showToast("Kurs o'chirildi ✅");
       })
