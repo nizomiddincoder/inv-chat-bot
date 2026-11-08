@@ -8,13 +8,32 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    /* Theme before first paint: stored choice wins, else system preference. */
+    (function () {
+      try {
+        var theme = localStorage.getItem("markaz_theme");
+        if (theme !== "dark" && theme !== "light") {
+          theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        if (theme === "dark") document.documentElement.classList.add("dark");
+      } catch (e) {}
+    })();
+  </script>
   <style>
     :root {
       --primary: #5B6CF0; --primary-deep: #4350C9; --primary-2: #7C89F5;
       --bg: #F4F5FD; --surface: #FFFFFF; --text: #1E2235; --muted: #6B7180;
       --border: #E6E8F4; --tint: #EEF0FD; --red: #EF4444;
+      --danger-bg: #FDEBEC; --danger-border: #F5C6C8; --danger-text: #B91C1C;
       --r-md: 12px; --r-lg: 16px;
       --sh-md: 0 4px 16px rgba(91,108,240,.10), 0 2px 6px rgba(30,34,53,.05);
+    }
+    html.dark {
+      --bg: #10121F; --surface: #191C2C; --text: #E8EAF6; --muted: #A2A8C0;
+      --border: #2B2F47; --tint: #232849; --primary-2: #8A96F7;
+      --danger-bg: #3A1518; --danger-border: #5C2428; --danger-text: #F58A8A;
+      --sh-md: 0 4px 16px rgba(0,0,0,.4), 0 2px 6px rgba(0,0,0,.3);
     }
     * { box-sizing: border-box; }
     body {
@@ -47,7 +66,7 @@
     }
     button:hover { background: var(--primary-deep); }
     .error {
-      background: #FDEBEC; border: 1px solid #F5C6C8; color: #B91C1C;
+      background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text);
       border-radius: var(--r-md); padding: 9px 12px; font-size: 13px; margin-bottom: 6px;
     }
   </style>

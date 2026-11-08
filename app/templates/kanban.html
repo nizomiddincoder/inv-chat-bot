@@ -1,24 +1,35 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  .board { display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; padding-bottom: 14px; }
+  /* Board: 5 equal columns. Desktop fits the screen; narrow screens scroll
+     horizontally inside THIS container (the page itself never scrolls). */
+  .board-scroll { overflow-x: auto; padding-bottom: 12px; -webkit-overflow-scrolling: touch; }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+    align-items: start;
+    min-width: 980px;
+  }
   .col {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
     box-shadow: var(--sh-sm);
-    min-width: 240px; width: 240px; flex: 0 0 auto;
+    min-width: 0;
+    max-width: 100%;
   }
   .col-head {
-    padding: 12px 14px;
+    padding: 12px 12px;
     font-weight: 600; font-size: 14px;
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
     border-bottom: 2px solid var(--c, var(--primary));
   }
+  .col-head .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .col-head .count {
-    background: var(--tint); color: var(--primary-deep);
+    background: var(--tint); color: var(--primary-2);
     border-radius: 999px; padding: 1px 9px; font-size: 12.5px; font-weight: 600;
-    min-width: 26px; text-align: center;
+    min-width: 26px; text-align: center; flex: 0 0 auto;
   }
   .col-body {
     padding: 10px; display: flex; flex-direction: column; gap: 10px;
@@ -31,10 +42,15 @@
     border-radius: var(--r-md);
     padding: 11px 12px;
     cursor: grab;
-    box-shadow: 0 1px 2px rgba(30,34,53,.05);
+    box-shadow: 0 1px 2px rgba(30,34,53,.06);
+    min-width: 0;
   }
   .kcard.dragging { opacity: .45; }
-  .kcard .name { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+  .kcard .name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; min-width: 0; }
+  .kcard .name .nm {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .kcard .name .badge { flex: 0 0 auto; }
   .kcard .avatar {
     width: 30px; height: 30px; flex: 0 0 auto; border-radius: 50%;
     background: var(--c, var(--primary)); color: #fff;
@@ -43,11 +59,17 @@
   }
   .kcard .badge {
     display: inline-block; font-size: 10.5px; background: var(--tint);
-    border-radius: 999px; padding: 1px 7px; color: var(--primary-deep); font-weight: 600;
+    border-radius: 999px; padding: 1px 7px; color: var(--primary-2); font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100px;
+    vertical-align: middle;
   }
-  .kcard .badge.warn { background: #FEF3E2; color: #B45309; }
-  .kcard .badge.mut { background: #F1F3F9; color: var(--muted); font-weight: 500; }
-  .kcard .meta { color: var(--muted); font-size: 12.5px; margin-top: 5px; overflow-wrap: anywhere; }
+  .kcard .badge.warn { background: var(--warn-bg); color: var(--warn-text); }
+  .kcard .badge.mut { background: var(--mut-bg); color: var(--mut-text); font-weight: 500; }
+  .kcard .meta {
+    color: var(--muted); font-size: 12.5px; margin-top: 5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .kcard .meta .badge { margin-top: 0; }
   /* phone + date: one row, wraps to a second row when it does not fit */
   .kcard .meta-row {
     display: flex; justify-content: space-between; align-items: baseline;
@@ -68,6 +90,17 @@
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
   }
   .stat b { font-size: 17px; color: var(--text); font-weight: 700; }
+
+  /* Mobile: columns keep a comfortable width and swipe horizontally
+     (snap makes one column land neatly in view). Simplest, no JS needed. */
+  @media (max-width: 700px) {
+    .board-scroll { scroll-snap-type: x proximity; }
+    .board {
+      grid-template-columns: repeat(5, min(78vw, 300px));
+      min-width: 0; width: max-content; gap: 10px;
+    }
+    .col { scroll-snap-align: start; }
+  }
 
   /* reject reason modal */
   .modal-backdrop {
@@ -142,19 +175,20 @@
   <span class="stat">Bugun<b>{{ today_count }}</b></span>
 </div>
 
+<div class="board-scroll">
 <div class="board" id="board">
   {% for col in columns %}
   <div class="col" data-status="{{ col.status }}" style="--c: {% if col.status == 'new' %}var(--primary){% elif col.status == 'contacted' %}var(--orange){% elif col.status == 'trial' %}var(--teal){% elif col.status == 'enrolled' %}var(--green){% else %}var(--red){% endif %}">
-    <div class="col-head">{{ col.label }} <span class="count" data-count>{{ 0 }}</span></div>
+    <div class="col-head"><span class="label">{{ col.label }}</span> <span class="count" data-count>{{ 0 }}</span></div>
     <div class="col-body" data-drop="{{ col.status }}">
       {% for c in cards if c.status == col.status %}
       <div class="kcard" draggable="true" data-id="{{ c.id }}" data-status="{{ c.status }}">
-        <div class="name"><span class="avatar">{{ c.full_name[:2] | upper }}</span>{{ c.full_name }}{% if c.repeat %}<span class="badge warn">takroriy</span>{% endif %}</div>
+        <div class="name" title="{{ c.full_name }}"><span class="avatar">{{ c.full_name[:2] | upper }}</span><span class="nm">{{ c.full_name }}</span>{% if c.repeat %}<span class="badge warn">takroriy</span>{% endif %}</div>
         <div class="meta-row">
           <span class="phone">{{ c.phone }}</span>
           <span class="time">{{ c.updated }}</span>
         </div>
-        <div class="meta">{{ c.course }}{% if c.username %} <span class="badge">@{{ c.username }}</span>{% endif %}</div>
+        <div class="meta" title="{{ c.course }}{% if c.username %} @{{ c.username }}{% endif %}">{{ c.course }}{% if c.username %} <span class="badge">@{{ c.username }}</span>{% endif %}</div>
         <div class="meta">
           {% if c.assignee %}<span class="badge mut">{{ c.assignee }}</span>{% endif %}
           <span class="badge mut">{{ c.source }}</span>
@@ -166,12 +200,13 @@
         <div class="fu {{ 'overdue' if c.follow_up_overdue else '' }}">Keyingi qo'ng'iroq: {{ c.follow_up_at }}{% if c.follow_up_overdue %} (muddati o'tgan){% endif %}</div>
         {% endif %}
         {% if c.reject_reason %}<div class="meta">Sabab: {{ c.reject_reason }}</div>{% endif %}
-        {% if c.notes %}<div class="meta">Izoh: {{ c.notes[:60] }}</div>{% endif %}
+        {% if c.notes %}<div class="meta" title="{{ c.notes }}">Izoh: {{ c.notes[:60] }}</div>{% endif %}
       </div>
       {% endfor %}
     </div>
   </div>
   {% endfor %}
+</div>
 </div>
 
 <!-- reject reason modal (opens when a card is dropped into "Rad etildi") -->

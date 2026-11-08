@@ -10,9 +10,9 @@
     display: inline-block; font-size: 11px; font-weight: 600;
     border-radius: 999px; padding: 2px 9px;
   }
-  .st-badge.faol { background: #E9F9EF; color: #15803D; }
-  .st-badge.navbatda { background: #FEF3E2; color: #B45309; }
-  .st-badge.tugatgan, .st-badge.toxtatgan { background: #F1F3F9; color: var(--muted); }
+  .st-badge.faol { background: var(--ok-bg); color: var(--ok-text); }
+  .st-badge.navbatda { background: var(--warn-bg); color: var(--warn-text); }
+  .st-badge.tugatgan, .st-badge.toxtatgan { background: var(--mut-bg); color: var(--mut-text); }
   .note-open, .card-open { font-size: 12px; color: var(--primary); background: none; border: none; padding: 0; height: auto; cursor: pointer; font-weight: 600; }
   .note-open:hover, .card-open:hover { background: none; text-decoration: underline; }
 
@@ -35,13 +35,14 @@
   .money-cell .lbl { font-size: 11.5px; color: var(--muted); }
   .money-cell .val { font-size: 15px; font-weight: 700; margin-top: 2px; white-space: nowrap; }
   .money-cell .val.debt { color: var(--red); }
+  .money-cell { background: var(--hover); border: 1px solid var(--border); }
   .periods { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 4px; }
   .periods td, .periods th { padding: 6px 8px; border-top: 1px solid var(--border); text-align: left; }
   .periods th { border-top: none; font-size: 11px; text-transform: uppercase; color: var(--faint); }
   .p-badge { font-size: 11px; border-radius: 999px; padding: 1px 8px; font-weight: 600; }
-  .p-badge.tolangan { background: #E9F9EF; color: #15803D; }
-  .p-badge.qisman { background: #FEF3E2; color: #B45309; }
-  .p-badge.qarz { background: #FDEBEC; color: #B91C1C; }
+  .p-badge.tolangan { background: var(--ok-bg); color: var(--ok-text); }
+  .p-badge.qisman { background: var(--warn-bg); color: var(--warn-text); }
+  .p-badge.qarz { background: var(--danger-bg); color: var(--danger-text); }
   .pay-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin: 10px 0; }
   .pay-row .fld { display: flex; flex-direction: column; gap: 3px; }
   .pay-row .fld label { margin: 0; font-size: 11.5px; color: var(--faint); }
