@@ -92,6 +92,14 @@ def _migrate_schema() -> None:
         "groups": {
             "capacity": "INTEGER",
             "status": "VARCHAR(20)",
+            "starts_on": "DATE",
+        },
+        "courses": {
+            "price_sum": "INTEGER",
+        },
+        "students": {
+            "discount_type": "VARCHAR(10)",
+            "discount_value": "INTEGER",
         },
     }
     with engine.begin() as conn:

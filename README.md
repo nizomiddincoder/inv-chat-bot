@@ -121,14 +121,15 @@ and soft shadows, a left sidebar navigation, and color-coded statuses
 
 | Page | What it does |
 |------|--------------|
-| **Bugun** *(main page)* | Kanban CRM board: every lead is a card, columns are stages (Yangi → Aloqaga chiqildi → Sinov darsi → O'qishga yozildi / Rad etildi). Drag & drop; "Rad etildi" asks for a reason, "O'qishga yozildi" asks for a group. |
+| **Bugun** *(main page)* | Today blocks (calls due, trials, groups starting, debtors) + the Kanban CRM board (Yangi → Aloqaga chiqildi → Sinov darsi → O'qishga yozildi / Rad etildi). Drag & drop; "Rad etildi" asks for a reason, "O'qishga yozildi" asks for a group. |
 | **Lidlar** | All leads. Auto-saved status/notes/assignee, trial-lesson date, next-call date (overdue in red), CSV export. |
-| **Talabalar** | Created automatically when a lead is "O'qishga yozildi". Search, group/status filters, notes history. Payments come in the next stage. |
-| **Guruhlar** | Groups with teacher, schedule ("Du-Chor-Ju 16:00"), start date and **seats (capacity)**. When seats fill, the group auto-becomes "To'ldi" and new enrollments go to the waiting list. |
+| **Talabalar** | Created automatically when a lead is "O'qishga yozildi". Search, filters, individual discounts, and a **student card**: monthly price, payments (naqd/karta/Click/Payme), month-by-month periods, debt. |
+| **Qarzdorlar** | Students with a debt: amount, days late, sortable by debt or lateness. |
+| **Guruhlar** | Groups with teacher, schedule ("Du-Chor-Ju 16:00"), start date (exact date drives reminders) and **seats (capacity)**. Full groups auto-become "To'ldi"; new enrollments go to the waiting list. |
 | **Kurslar** | Courses as cards: name, **price, duration, teacher**, description, order, on/off. Auto-saved. |
 | **O'qituvchilar** | Teachers with phone and a short bio, linked to courses/groups. |
 | **AI Javoblar** | Tune Claude's answer style (professional prompt) + extra knowledge + a **sandbox test window**. |
-| **Sozlamalar** | Working hours (Tashkent time) and Owner chat ID. |
+| **Sozlamalar** | Working hours (Tashkent time), Owner chat ID and the **Telegram reminders toggle** with a "Test xabar yuborish" button. Reminders: group start 1 day before, trial lesson 1 day before, debtors once a week (Mondays) — only inside working hours, once per day, every send logged. |
 | **Xodimlar** | Staff list with logins and roles (role-based visibility comes later). |
 
 Outside working hours the bot adds: *"Hozir ish vaqtimiz tugagan, ertaga javob beramiz."*

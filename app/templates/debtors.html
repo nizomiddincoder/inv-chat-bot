@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .debt { color: var(--red); font-weight: 700; white-space: nowrap; }
+  .late { color: var(--red); font-weight: 600; white-space: nowrap; }
+  .paid { color: var(--muted); white-space: nowrap; }
+  .card-link { color: var(--primary); font-weight: 600; text-decoration: none; }
+  .card-link:hover { text-decoration: underline; }
+  .empty { color: var(--muted); }
+</style>
+
+<h1>Qarzdorlar</h1>
+<p class="page-sub">Qarzi bor faol talabalar. Qarz = oylik narx (chegirma bilan) − to'langan, davrlar bo'yicha.</p>
+
+<div class="filters">
+  <a class="btn {{ 'outline' if sort == 'debt' else '' }}" href="/admin/debtors?sort=debt">Eng ko'p qarz</a>
+  <a class="btn {{ 'outline' if sort == 'late' else '' }}" href="/admin/debtors?sort=late">Eng uzoq kechikkan</a>
+</div>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>Talaba</th><th>Telefon</th><th>Guruh</th><th>To'langan</th><th>Qarz</th><th>Kechikkan</th></tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td><a class="card-link" href="/admin/students?student_id={{ r.student.id }}">{{ r.student.full_name or '—' }}</a></td>
+      <td class="nowrap">{{ r.student.phone or '—' }}</td>
+      <td>{{ r.group.name if r.group else '—' }}</td>
+      <td class="paid">{{ r.paid_total | som }} so'm</td>
+      <td class="debt">{{ r.debt | som }} so'm</td>
+      <td class="late">{{ r.days_late }} kun</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="empty">Hozircha qarzdor yo'q — hammasi o'z vaqtida to'lagan.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

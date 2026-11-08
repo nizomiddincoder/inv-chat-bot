@@ -48,8 +48,12 @@
       <input type="text" name="name" id="new-name" placeholder="Masalan: Frontend dasturlash">
     </div>
     <div class="fld">
-      <label for="new-price">Narx</label>
+      <label for="new-price">Narx (matn)</label>
       <input type="text" name="price" id="new-price" placeholder="500 000 so'm/oy">
+    </div>
+    <div class="fld">
+      <label for="new-price-sum">Oylik narx (so'm)</label>
+      <input type="number" name="price_sum" id="new-price-sum" value="0" title="To'lov va qarz hisobi uchun. Butun son, masalan: 500000">
     </div>
     <div class="fld">
       <label for="new-duration">Muddat</label>
@@ -82,8 +86,12 @@
     <input type="text" data-f="name" value="{{ course.name }}" data-orig="{{ course.name }}">
   </div>
   <div class="fld">
-    <label>Narx</label>
+    <label>Narx (matn)</label>
     <input type="text" data-f="price" value="{{ course.price or '' }}" data-orig="{{ course.price or '' }}" placeholder="500 000 so'm/oy">
+  </div>
+  <div class="fld">
+    <label>Oylik narx (so'm)</label>
+    <input type="number" data-f="price_sum" value="{{ course.price_sum or 0 }}" data-orig="{{ course.price_sum or 0 }}" title="To'lov va qarz hisobi uchun">
   </div>
   <div class="fld">
     <label>Muddat</label>

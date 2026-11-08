@@ -90,6 +90,53 @@
 <h1>Bugun</h1>
 <p class="page-sub">Kanban doskasi — kartani sudrab bosqichni o'zgartiring. "Rad etildi" uchun sabab, "O'qishga yozildi" uchun guruh so'raladi.</p>
 
+<style>
+  .today-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .today-card { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-sm); padding: 12px 16px; }
+  .today-card h2 { font-size: 13px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .today-card .t-item { display: block; padding: 5px 0; color: var(--text); text-decoration: none; font-size: 13.5px; border-top: 1px solid var(--border); }
+  .today-card .t-item:first-of-type { border-top: none; }
+  .today-card .t-item:hover { color: var(--primary); }
+  .today-card .t-item .d { color: var(--faint); font-size: 12px; }
+  .today-card .t-empty { color: var(--faint); font-size: 13px; }
+  .today-card .t-count { display: inline-block; background: var(--tint); color: var(--primary-deep); border-radius: 999px; padding: 1px 9px; font-size: 12px; font-weight: 600; margin-left: 6px; }
+</style>
+
+<div class="today-grid">
+  <div class="today-card">
+    <h2>Qo'ng'iroq kerak <span class="t-count">{{ overview.call_leads | length }}</span></h2>
+    {% for l in overview.call_leads[:4] %}
+    <a class="t-item" href="/admin/leads?q={{ l.phone or l.full_name }}">{{ l.full_name or "Noma'lum" }} <span class="d">· {{ l.follow_up_at.strftime('%d.%m') }}</span></a>
+    {% else %}
+    <div class="t-empty">Bugun ishlar yo'q</div>
+    {% endfor %}
+  </div>
+  <div class="today-card">
+    <h2>Sinov darsi <span class="t-count">{{ overview.trial_leads | length }}</span></h2>
+    {% for l in overview.trial_leads[:4] %}
+    <a class="t-item" href="/admin/leads?q={{ l.phone or l.full_name }}">{{ l.full_name or "Noma'lum" }} <span class="d">· {{ l.trial_date.strftime('%d.%m') }}</span></a>
+    {% else %}
+    <div class="t-empty">Bugun ishlar yo'q</div>
+    {% endfor %}
+  </div>
+  <div class="today-card">
+    <h2>Bugun boshlanadigan guruhlar <span class="t-count">{{ overview.starting_groups | length }}</span></h2>
+    {% for g in overview.starting_groups[:4] %}
+    <a class="t-item" href="/admin/groups">{{ g.name }} <span class="d">· {{ g.schedule or '' }}</span></a>
+    {% else %}
+    <div class="t-empty">Bugun ishlar yo'q</div>
+    {% endfor %}
+  </div>
+  <div class="today-card">
+    <h2>Qarzdorlar <span class="t-count">{{ overview.debtor_count }}</span></h2>
+    {% if overview.debtor_count %}
+    <a class="t-item" href="/admin/debtors">{{ overview.debtor_count }} talabada qarz bor <span class="d">· ko'rish</span></a>
+    {% else %}
+    <div class="t-empty">Bugun ishlar yo'q</div>
+    {% endif %}
+  </div>
+</div>
+
 <div class="stats">
   <span class="stat">Jami lidlar<b>{{ total_count }}</b></span>
   <span class="stat">Bugun<b>{{ today_count }}</b></span>

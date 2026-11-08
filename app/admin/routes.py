@@ -23,21 +23,25 @@ from ..auth import (
 )
 from ..config import settings
 from ..database import SessionLocal
-from ..models import Course, Group, Lead, Student, StudentNote, Teacher
+from .. import reminders
+from ..models import Course, Group, Lead, Payment, ReminderLog, Student, StudentNote, Teacher
 from ..services import (
     AI_KNOWLEDGE_KEY,
     AI_STYLE_KEY,
     GROUP_STATUSES,
+    PAYMENT_METHODS,
     REJECT_REASONS,
     ROLES,
     SOURCES,
     STUDENT_STATUSES,
     TZ,
     add_lead_note,
+    add_payment,
     add_student_note,
     enroll_lead,
     get_ai_text,
     get_all_courses,
+    get_debtors,
     get_employees,
     get_lead_notes,
     get_setting,
@@ -45,11 +49,15 @@ from ..services import (
     get_students_filtered,
     get_teachers,
     get_work_hours,
+    monthly_price,
     normalize_phone,
     set_ai_text,
     set_setting,
     set_student_status,
     source_label,
+    student_debt,
+    student_periods,
+    today_overview,
     upsert_manual_lead,
 )
 
@@ -71,6 +79,17 @@ def _format_tashkent(dt: datetime | None) -> str:
 
 
 templates.env.filters["tashkent"] = _format_tashkent
+
+
+def _format_sum(amount) -> str:
+    """Whole so'm with thin space separators, e.g. 500 000."""
+    try:
+        return f"{int(amount or 0):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return str(amount or 0)
+
+
+templates.env.filters["som"] = _format_sum
 templates.env.globals["source_label"] = source_label
 
 STATUS_LABELS = {
@@ -547,7 +566,8 @@ KANBAN_STATUSES = ["new", "contacted", "trial", "enrolled", "rejected"]
 
 @router.get("/kanban")
 def kanban_page(request: Request, _: str = Depends(check_auth)):
-    """CRM board: every lead is a card, columns are pipeline stages."""
+    """'Bugun' dashboard + CRM board: every lead is a card, columns are stages."""
+    overview = today_overview()
     today_start_utc = datetime.now(TZ).replace(
         hour=0, minute=0, second=0, microsecond=0
     ).astimezone(timezone.utc)
@@ -599,6 +619,7 @@ def kanban_page(request: Request, _: str = Depends(check_auth)):
             "cards": cards,
             "reject_reasons": REJECT_REASONS,
             "enroll_groups": enroll_groups,
+            "overview": overview,
             "today_count": today_count,
             "total_count": len(cards),
             "active": "kanban",
@@ -647,6 +668,7 @@ def add_course(
     name: str = Form(...),
     sort_order: int = Form(0),
     price: str = Form(""),
+    price_sum: int = Form(0),
     duration: str = Form(""),
     description: str = Form(""),
     teacher_id: int = Form(0),
@@ -664,13 +686,14 @@ def add_course(
                     sort_order=sort_order,
                     is_enabled=True,
                     price=price.strip() or None,
+                    price_sum=price_sum or None,
                     duration=duration.strip() or None,
                     description=description.strip() or None,
                     teacher_id=teacher_id or None,
                 )
             )
             session.commit()
-            log.info("Course added: %s", name)
+            log.info("Course added: %s (price_sum=%s)", name, price_sum or "-")
     return RedirectResponse(url="/admin/courses?saved=1", status_code=303)
 
 
@@ -681,6 +704,7 @@ def update_course(
     sort_order: int = Form(0),
     is_enabled: str = Form(""),
     price: str = Form(""),
+    price_sum: int = Form(0),
     duration: str = Form(""),
     description: str = Form(""),
     teacher_id: int = Form(0),
@@ -693,11 +717,13 @@ def update_course(
             course.sort_order = sort_order
             course.is_enabled = is_enabled == "on"  # checkbox: present = "on"
             course.price = price.strip() or None
+            course.price_sum = price_sum or None
             course.duration = duration.strip() or None
             course.description = description.strip() or None
             course.teacher_id = teacher_id or None
             session.commit()
-            log.info("Course updated: id=%s name=%s enabled=%s", course_id, course.name, course.is_enabled)
+            log.info("Course updated: id=%s name=%s enabled=%s price_sum=%s",
+                     course_id, course.name, course.is_enabled, course.price_sum or "-")
     return RedirectResponse(url="/admin/courses?saved=1", status_code=303)
 
 
@@ -819,6 +845,7 @@ def add_group(
     teacher_id: int = Form(0),
     schedule: str = Form(""),
     start_date: str = Form(""),
+    starts_on: str = Form(""),
     capacity: int = Form(0),
     _: None = Depends(check_auth),
 ):
@@ -833,6 +860,7 @@ def add_group(
                 teacher_id=teacher_id or None,
                 schedule=schedule.strip() or None,
                 start_date=start_date.strip() or None,
+                starts_on=_parse_date(starts_on),
                 capacity=capacity or None,
                 status="ochiq",
                 is_enabled=True,
@@ -851,6 +879,7 @@ def update_group(
     teacher_id: int = Form(0),
     schedule: str = Form(""),
     start_date: str = Form(""),
+    starts_on: str = Form(""),
     capacity: int = Form(0),
     status: str = Form(""),
     is_enabled: str = Form(""),
@@ -866,6 +895,7 @@ def update_group(
             group.teacher_id = teacher_id or None
             group.schedule = schedule.strip() or None
             group.start_date = start_date.strip() or None
+            group.starts_on = _parse_date(starts_on)
             group.capacity = capacity or None
             # Manual close wins; otherwise the auto fill state is recomputed.
             group.status = status if status in GROUP_STATUSES else None
@@ -890,6 +920,23 @@ def delete_group(group_id: int, _: None = Depends(check_auth)):
 
 
 # ---------------------------------------------------------------------------
+# Debtors
+# ---------------------------------------------------------------------------
+
+@router.get("/debtors")
+def debtors_page(request: Request, sort: str = "debt", _: str = Depends(check_auth)):
+    """Students with a debt; sortable by debt amount or days late."""
+    rows = get_debtors()
+    if sort == "late":
+        rows.sort(key=lambda r: r["days_late"], reverse=True)
+    return templates.TemplateResponse(
+        request,
+        "debtors.html",
+        {"rows": rows, "sort": sort, "active": "debtors"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Students (created automatically when a lead is enrolled)
 # ---------------------------------------------------------------------------
 
@@ -899,9 +946,15 @@ def students_page(
     q: str = "",
     group_id: int = 0,
     status: str = "",
+    student_id: int = 0,
     _: str = Depends(check_auth),
 ):
-    students_list = get_students_filtered(q, group_id, status)
+    if student_id:
+        # direct link from the debtors page — show only this student's card
+        students_list = get_students_filtered("", 0, "")
+        students_list = [s for s in students_list if s.id == student_id]
+    else:
+        students_list = get_students_filtered(q, group_id, status)
     with SessionLocal() as session:
         groups = session.query(Group).order_by(Group.name, Group.id).all()
     query_string = urlencode({"q": q, "group_id": group_id, "status": status})
@@ -912,6 +965,7 @@ def students_page(
             "students": students_list,
             "groups": groups,
             "student_statuses": STUDENT_STATUSES,
+            "payment_methods": PAYMENT_METHODS,
             "f_q": q,
             "f_group": group_id,
             "f_status": status,
@@ -928,9 +982,11 @@ def update_student(
     phone: str = Form(""),
     group_id: int = Form(0),
     status: str = Form(""),
+    discount_type: str = Form(""),
+    discount_value: int = Form(0),
     _: str = Depends(check_auth),
 ):
-    """Auto-save a student row (name, phone, group, status)."""
+    """Auto-save a student row (name, phone, group, status, discount)."""
     from ..models import utcnow
     from ..services import refresh_group_status
 
@@ -949,11 +1005,144 @@ def update_student(
         student.group_id = group_id or None
         if status in STUDENT_STATUSES:
             student.status = status
+        # discount: "sum" (so'm) or "percent"; empty clears it
+        if discount_type in ("sum", "percent"):
+            if discount_value < 0 or (discount_type == "percent" and discount_value > 100):
+                return JSONResponse(
+                    {"ok": False, "error": "Chegirma qiymati noto'g'ri"}, status_code=400
+                )
+            student.discount_type = discount_type
+            student.discount_value = discount_value or None
+        elif discount_type == "none":
+            student.discount_type = None
+            student.discount_value = None
         student.updated_at = utcnow()
         session.commit()
     for gid in {old_group, group_id or None} - {None}:
         refresh_group_status(gid)
-    log.info("Student %s updated (status=%s group=%s)", student_id, status or "-", group_id or "-")
+    log.info("Student %s updated (status=%s group=%s discount=%s)",
+             student_id, status or "-", group_id or "-", discount_type or "-")
+    return JSONResponse({"ok": True})
+
+
+@router.get("/students/{student_id}/card")
+def student_card(student_id: int, _: str = Depends(check_auth)):
+    """Student card JSON: info, group, money summary, periods, payments."""
+    with SessionLocal() as session:
+        student = session.get(Student, student_id)
+        if student is None:
+            return JSONResponse({"ok": False, "error": "Talaba topilmadi"}, status_code=404)
+        course = None
+        group = None
+        if student.group_id:
+            group = session.get(Group, student.group_id)
+            course = session.get(Course, group.course_id) if group else None
+        payments = (
+            session.query(Payment)
+            .filter(Payment.student_id == student_id)
+            .order_by(Payment.id.desc())
+            .all()
+        )
+        notes = (
+            session.query(StudentNote)
+            .filter(StudentNote.student_id == student_id)
+            .order_by(StudentNote.id.desc())
+            .limit(20)
+            .all()
+        )
+
+    price = monthly_price(student, course)
+    debt = student_debt(student, course)
+    periods = student_periods(student, course)
+    return JSONResponse(
+        {
+            "ok": True,
+            "student": {
+                "id": student.id,
+                "full_name": student.full_name or "—",
+                "phone": student.phone or "—",
+                "username": student.username or "",
+                "status": student.status,
+                "group": group.name if group else None,
+                "course": course.name if course else None,
+                "source": source_label(student.source),
+                "enrolled": student.enrolled_at.strftime("%d.%m.%Y") if student.enrolled_at else "—",
+                "discount": (
+                    f"-{student.discount_value}%" if student.discount_type == "percent"
+                    else f"-{_format_sum(student.discount_value)} so'm" if student.discount_type == "sum"
+                    else ""
+                ),
+            },
+            "money": {
+                "monthly_price": price,
+                "total_expected": debt["total_expected"],
+                "paid_total": debt["paid_total"],
+                "debt": debt["debt"],
+                "days_late": debt["days_late"],
+                "price_set": bool(price > 0),
+            },
+            "periods": periods,
+            "payments": [
+                {
+                    "id": p.id,
+                    "amount": p.amount,
+                    "date": p.paid_date.strftime("%d.%m.%Y") if p.paid_date else "",
+                    "method": PAYMENT_METHODS.get(p.method or "", p.method or "—"),
+                    "period": p.period or "—",
+                    "note": p.note or "",
+                    "created_by": p.created_by or "—",
+                }
+                for p in payments
+            ],
+            "notes": [
+                {"text": n.text, "author": n.author or "—", "created": _format_tashkent(n.created_at)}
+                for n in notes
+            ],
+        }
+    )
+
+
+@router.post("/payments/add")
+def add_payment_route(
+    student_id: int = Form(...),
+    amount: int = Form(...),
+    paid_date: str = Form(""),
+    method: str = Form("naqd"),
+    period: str = Form(""),
+    note: str = Form(""),
+    user: str = Depends(check_auth),
+):
+    """Add a payment (whole so'm). period = YYYY-MM the payment covers."""
+    if amount <= 0:
+        return JSONResponse({"ok": False, "error": "Summa musbat bo'lishi kerak"}, status_code=400)
+    with SessionLocal() as session:
+        if session.get(Student, student_id) is None:
+            return JSONResponse({"ok": False, "error": "Talaba topilmadi"}, status_code=404)
+    period = (period or "").strip()
+    if period and (len(period) != 7 or not period[:4].isdigit() or period[4] != "-" or not period[5:].isdigit()):
+        return JSONResponse({"ok": False, "error": "Davr formati YYYY-MM"}, status_code=400)
+    payment = add_payment(
+        student_id=student_id,
+        amount=amount,
+        paid_date=_parse_date(paid_date) or datetime.now(TZ).date(),
+        method=method,
+        period=period or None,
+        note=note,
+        created_by=user,
+    )
+    return JSONResponse(
+        {"ok": True, "payment": {"id": payment.id, "amount": payment.amount}}
+    )
+
+
+@router.post("/payments/{payment_id}/delete")
+def delete_payment_route(payment_id: int, _: str = Depends(check_auth)):
+    with SessionLocal() as session:
+        payment = session.get(Payment, payment_id)
+        if payment:
+            session.delete(payment)
+            session.commit()
+            log.info("Payment deleted: id=%s", payment_id)
     return JSONResponse({"ok": True})
 
 
@@ -1119,6 +1308,7 @@ def settings_page(request: Request, saved: int = 0, _: None = Depends(check_auth
             "work_start": get_setting("work_start", start.strftime("%H:%M")),
             "work_end": get_setting("work_end", end.strftime("%H:%M")),
             "owner_chat_id": get_setting("owner_chat_id", ""),
+            "reminders_enabled": get_setting("reminders_enabled", "1") == "1",
             "saved": saved,
             "active": "settings",
             "tz": str(TZ),
@@ -1131,6 +1321,7 @@ def save_settings(
     work_start: str = Form(...),
     work_end: str = Form(...),
     owner_chat_id: str = Form(""),
+    reminders_enabled: str = Form(""),
     _: None = Depends(check_auth),
 ):
     # Validate the times before saving.
@@ -1145,5 +1336,15 @@ def save_settings(
     if owner and not owner.lstrip("-").isdigit():
         raise HTTPException(status_code=400, detail="Owner chat id must be a number")
     set_setting("owner_chat_id", owner)
-    log.info("Settings saved: work %s-%s, owner=%s", work_start, work_end, owner or "-")
+    set_setting("reminders_enabled", "1" if reminders_enabled == "on" else "0")
+    log.info("Settings saved: work %s-%s, owner=%s, reminders=%s",
+             work_start, work_end, owner or "-", reminders_enabled == "on")
     return RedirectResponse(url="/admin/settings?saved=1", status_code=303)
+
+
+@router.post("/reminders/test")
+def reminders_test(_: None = Depends(check_auth)):
+    """'Test xabar yuborish' — one message to the owner chat id."""
+    ok, message = reminders.send_test_message()
+    log.info("Reminder test: ok=%s", ok)
+    return JSONResponse({"ok": ok, "message": message})

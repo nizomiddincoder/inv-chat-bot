@@ -1,9 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  .st-input { width: 150px; }
-  .phone-input { width: 130px; }
-  .st-group, .st-status { max-width: 150px; }
+  .st-input { width: 140px; }
+  .phone-input { width: 125px; }
+  .disc-input { width: 80px; }
+  .disc-select { max-width: 110px; }
+  .st-group, .st-status { max-width: 145px; }
   .st-badge {
     display: inline-block; font-size: 11px; font-weight: 600;
     border-radius: 999px; padding: 2px 9px;
@@ -11,9 +13,8 @@
   .st-badge.faol { background: #E9F9EF; color: #15803D; }
   .st-badge.navbatda { background: #FEF3E2; color: #B45309; }
   .st-badge.tugatgan, .st-badge.toxtatgan { background: #F1F3F9; color: var(--muted); }
-  .note-open { font-size: 12px; color: var(--primary); background: none; border: none; padding: 0; height: auto; cursor: pointer; font-weight: 600; }
-  .note-open:hover { background: none; text-decoration: underline; }
-  .pay-soon { font-size: 12px; color: var(--faint); }
+  .note-open, .card-open { font-size: 12px; color: var(--primary); background: none; border: none; padding: 0; height: auto; cursor: pointer; font-weight: 600; }
+  .note-open:hover, .card-open:hover { background: none; text-decoration: underline; }
 
   .modal-backdrop {
     position: fixed; inset: 0; z-index: 50;
@@ -25,17 +26,36 @@
   .modal {
     background: var(--surface); border-radius: var(--r-lg);
     box-shadow: var(--sh-md); padding: 22px 24px;
-    max-width: 480px; width: 100%; max-height: 80vh; overflow-y: auto;
+    max-width: 560px; width: 100%; max-height: 85vh; overflow-y: auto;
   }
-  .modal h2 { margin-bottom: 12px; }
-  .note-item { border-bottom: 1px solid var(--border); padding: 9px 2px; }
+  .modal h2 { margin-bottom: 4px; }
+  .modal .sub { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  .money-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+  .money-cell { background: var(--bg); border-radius: var(--r-md); padding: 9px 12px; }
+  .money-cell .lbl { font-size: 11.5px; color: var(--muted); }
+  .money-cell .val { font-size: 15px; font-weight: 700; margin-top: 2px; white-space: nowrap; }
+  .money-cell .val.debt { color: var(--red); }
+  .periods { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 4px; }
+  .periods td, .periods th { padding: 6px 8px; border-top: 1px solid var(--border); text-align: left; }
+  .periods th { border-top: none; font-size: 11px; text-transform: uppercase; color: var(--faint); }
+  .p-badge { font-size: 11px; border-radius: 999px; padding: 1px 8px; font-weight: 600; }
+  .p-badge.tolangan { background: #E9F9EF; color: #15803D; }
+  .p-badge.qisman { background: #FEF3E2; color: #B45309; }
+  .p-badge.qarz { background: #FDEBEC; color: #B91C1C; }
+  .pay-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin: 10px 0; }
+  .pay-row .fld { display: flex; flex-direction: column; gap: 3px; }
+  .pay-row .fld label { margin: 0; font-size: 11.5px; color: var(--faint); }
+  .pay-row input, .pay-row select { height: 34px; font-size: 13px; }
+  .note-item { border-bottom: 1px solid var(--border); padding: 8px 2px; }
   .note-item:last-child { border-bottom: none; }
   .note-item .meta { color: var(--faint); font-size: 12px; margin-top: 3px; }
   .modal .actions { justify-content: flex-end; margin-top: 14px; }
+  .field-error { color: var(--red); font-size: 12.5px; margin-top: 5px; }
+  @media (max-width: 640px) { .money-grid { grid-template-columns: 1fr; } }
 </style>
 
 <h1>Talabalar</h1>
-<p class="page-sub">"O'qishga yozildi" holatidagi lidlardan avtomatik yaratiladi. To'lovlar keyingi bosqichda qo'shiladi.</p>
+<p class="page-sub">"O'qishga yozildi" holatidagi lidlardan avtomatik yaratiladi. Kartada to'lovlar va qarz.</p>
 
 <form method="get" action="/admin/students" class="filters" id="filters">
   <input type="text" name="q" value="{{ f_q }}" placeholder="Ism yoki telefon" aria-label="Qidirish">
@@ -56,7 +76,7 @@
 <div class="table-wrap">
 <table>
   <thead>
-    <tr><th>ID</th><th>Ism</th><th>Telefon</th><th>Guruh</th><th>Holat</th><th>Yozilgan sana</th><th>Izohlar</th></tr>
+    <tr><th>ID</th><th>Ism</th><th>Telefon</th><th>Guruh</th><th>Holat</th><th>Chegirma</th><th>Karta</th></tr>
   </thead>
   <tbody>
   {% for s in students %}
@@ -80,9 +100,17 @@
           {% endfor %}
         </select>
       </td>
-      <td class="nowrap">{{ s.enrolled_at.strftime('%d.%m.%Y') if s.enrolled_at else '—' }}</td>
-      <td>
-        <button type="button" class="note-open" data-notes="{{ s.id }}">Tarix</button>
+      <td class="nowrap">
+        <select class="disc-select" data-f="discount_type" aria-label="Chegirma turi">
+          <option value="none" {{ 'selected' if not s.discount_type else '' }}>yo'q</option>
+          <option value="sum" {{ 'selected' if s.discount_type == 'sum' else '' }}>so'm</option>
+          <option value="percent" {{ 'selected' if s.discount_type == 'percent' else '' }}>%</option>
+        </select>
+        <input type="number" class="disc-input" data-f="discount_value" value="{{ s.discount_value or '' }}" placeholder="0" aria-label="Chegirma qiymati">
+      </td>
+      <td class="nowrap">
+        <button type="button" class="card-open" data-card="{{ s.id }}">Ochish</button>
+        <button type="button" class="note-open" data-notes="{{ s.id }}">Izoh</button>
       </td>
     </tr>
   {% else %}
@@ -91,15 +119,44 @@
   </tbody>
 </table>
 </div>
-<p class="hint">To'lovlar bo'limi keyingi bosqichda qo'shiladi.</p>
+<p class="hint">To'lovlar talaba kartasida yuritiladi. Summalar butun so'mda saqlanadi.</p>
 
-<!-- notes history modal -->
-<div class="modal-backdrop" id="notes-modal" hidden>
-  <div class="modal" role="dialog" aria-modal="true">
-    <h2>Talaba izohlari</h2>
-    <div id="notes-list"></div>
+<!-- student card modal -->
+<div class="modal-backdrop" id="card-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="card-title">
+    <h2 id="card-title">Talaba kartasi</h2>
+    <div class="sub" id="card-sub"></div>
+
+    <div class="money-grid" id="card-money"></div>
+
+    <h2 style="font-size:14px;">Davr bo'yicha to'lov holati</h2>
+    <table class="periods" id="card-periods"></table>
+
+    <h2 style="font-size:14px;">To'lov qo'shish</h2>
+    <div class="pay-row">
+      <div class="fld"><label for="pay-amount">Summa (so'm)</label><input type="number" id="pay-amount" min="1" placeholder="500000"></div>
+      <div class="fld"><label for="pay-date">Sana</label><input type="date" id="pay-date"></div>
+      <div class="fld"><label for="pay-method">Usul</label>
+        <select id="pay-method">
+          {% for value, label in payment_methods.items() %}
+          <option value="{{ value }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="fld"><label for="pay-period">Davr (oy)</label><input type="month" id="pay-period"></div>
+      <div class="fld"><label for="pay-note">Izoh</label><input type="text" id="pay-note" placeholder="ixtiyoriy"></div>
+      <button type="button" id="pay-add">Qo'shish</button>
+    </div>
+    <div class="field-error" id="pay-error" hidden></div>
+
+    <h2 style="font-size:14px;">To'lovlar tarixi</h2>
+    <div id="card-payments"></div>
+
+    <h2 style="font-size:14px;">Izohlar</h2>
+    <div id="card-notes"></div>
+
     <div class="actions">
-      <button type="button" class="outline" id="notes-close">Yopish</button>
+      <button type="button" class="outline" id="card-close">Yopish</button>
     </div>
   </div>
 </div>
@@ -136,12 +193,15 @@
   });
 
   function saveRow(row) {
+    var discType = row.querySelector("[data-f='discount_type']").value;
+    var discVal = row.querySelector("[data-f='discount_value']").value;
     var body = new URLSearchParams();
-    var statusSel = row.querySelector("[data-f='status']");
     body.set("full_name", row.querySelector("[data-f='full_name']").value);
     body.set("phone", row.querySelector("[data-f='phone']").value);
     body.set("group_id", row.querySelector("[data-f='group_id']").value);
-    body.set("status", statusSel.value);
+    body.set("status", row.querySelector("[data-f='status']").value);
+    body.set("discount_type", discType === "none" ? "none" : discType);
+    body.set("discount_value", discType === "none" ? "0" : (discVal || "0"));
     fetch("/admin/students/" + row.dataset.id + "/update", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -149,25 +209,124 @@
     }).then(function (r) { return r.json(); }).then(function (data) {
       if (!data.ok) { showToast(data.error || "Saqlanmadi"); return; }
       var badge = row.querySelector(".st-badge");
+      var statusSel = row.querySelector("[data-f='status']");
       badge.className = "st-badge " + statusSel.value;
       badge.textContent = statusSel.options[statusSel.selectedIndex].textContent;
       showToast("Saqlandi");
     }).catch(function () { showToast("Tarmoq xatosi"); });
   }
 
-  // --- notes history modal ---
-  var modal = document.getElementById("notes-modal");
-  var list = document.getElementById("notes-list");
+  // --- student card modal ---
+  var modal = document.getElementById("card-modal");
+  var currentStudent = null;
+
+  function fmtSum(v) { return String(v).replace(/\B(?=(\d{3})+(?!\d))/g, " "); }
+
+  function moneyCell(lbl, val, cls) {
+    return '<div class="money-cell"><div class="lbl">' + lbl + '</div><div class="val ' + (cls || '') + '">' + val + '</div></div>';
+  }
+
+  function loadCard(id) {
+    fetch("/admin/students/" + id + "/card")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) { showToast(data.error || "Xatolik"); return; }
+        var s = data.student, m = data.money;
+        document.getElementById("card-title").textContent = s.full_name;
+        document.getElementById("card-sub").textContent =
+          s.phone + (s.username ? " · @" + s.username : "") + " · " + (s.course || "kurs tanlanmagan") +
+          " · " + (s.group || "guruhsiz") + " · Manba: " + s.source + " · Yozilgan: " + s.enrolled +
+          (s.discount ? " · Chegirma: " + s.discount : "");
+        document.getElementById("card-money").innerHTML = m.price_set
+          ? moneyCell("Oylik narx (chegirma bilan)", fmtSum(m.monthly_price) + " so'm")
+            + moneyCell("Jami to'langan", fmtSum(m.paid_total) + " so'm")
+            + moneyCell("Qarz", fmtSum(m.debt) + " so'm", m.debt > 0 ? "debt" : "")
+          : moneyCell("Narx", "Kursga oylik narx kiritilmagan");
+        var periods = document.getElementById("card-periods");
+        if (!data.periods.length) {
+          periods.innerHTML = "<tr><td style='color:var(--muted)'>Davr yo'q — kursga oylik narx kiriting yoki talaba hali guruhga biriktirilmagan.</td></tr>";
+        } else {
+          periods.innerHTML = "<tr><th>Davr</th><th>Kutilgan</th><th>To'langan</th><th>Holat</th></tr>" +
+            data.periods.map(function (p) {
+              return "<tr><td>" + p.period + "</td><td>" + fmtSum(p.expected) + "</td><td>" + fmtSum(p.paid) + "</td><td><span class='p-badge " + p.status + "'>" +
+                (p.status === "tolangan" ? "To'langan" : p.status === "qisman" ? "Qisman" : "Qarz") + "</span></td></tr>";
+            }).join("");
+        }
+        var pays = document.getElementById("card-payments");
+        if (!data.payments.length) {
+          pays.innerHTML = "<p class='hint'>Hozircha to'lov yo'q.</p>";
+        } else {
+          pays.innerHTML = data.payments.map(function (p) {
+            return "<div class='note-item'><b>" + fmtSum(p.amount) + " so'm</b> — " + p.date + " · " + p.method +
+              " · davr: " + p.period + (p.note ? " · " + p.note : "") +
+              "<div class='meta'>Kiritdi: " + p.created_by + "</div></div>";
+          }).join("");
+        }
+        var notes = document.getElementById("card-notes");
+        if (!data.notes.length) {
+          notes.innerHTML = "<p class='hint'>Hozircha izoh yo'q.</p>";
+        } else {
+          notes.innerHTML = data.notes.map(function (n) {
+            return "<div class='note-item'>" + n.text + "<div class='meta'>" + n.created + " · " + n.author + "</div></div>";
+          }).join("");
+        }
+        modal.hidden = false;
+      })
+      .catch(function () { showToast("Tarmoq xatosi"); });
+  }
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-card]");
+    if (btn) { currentStudent = btn.dataset.card; loadCard(currentStudent); }
+  });
+  document.getElementById("card-close").addEventListener("click", function () { modal.hidden = true; });
+  modal.addEventListener("click", function (e) { if (e.target === modal) modal.hidden = true; });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") modal.hidden = true; });
+
+  // --- add payment inside the card ---
+  document.getElementById("pay-add").addEventListener("click", function () {
+    var err = document.getElementById("pay-error");
+    err.hidden = true;
+    var amount = document.getElementById("pay-amount").value;
+    var period = document.getElementById("pay-period").value;
+    if (!amount || parseInt(amount, 10) <= 0) {
+      err.textContent = "Summani kiriting (butun son, so'mda).";
+      err.hidden = false;
+      return;
+    }
+    var body = new URLSearchParams({
+      student_id: currentStudent,
+      amount: amount,
+      paid_date: document.getElementById("pay-date").value,
+      method: document.getElementById("pay-method").value,
+      period: period,
+      note: document.getElementById("pay-note").value
+    });
+    fetch("/admin/payments/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok) { err.textContent = data.error || "Saqlanmadi"; err.hidden = false; return; }
+      showToast("To'lov qo'shildi");
+      ["pay-amount", "pay-note"].forEach(function (id) { document.getElementById(id).value = ""; });
+      loadCard(currentStudent);
+    }).catch(function () { err.textContent = "Tarmoq xatosi"; err.hidden = false; });
+  });
+
+  // --- quick notes modal ---
+  var nmodal = document.getElementById("notes-modal");
+  var nlist = document.getElementById("notes-list");
   document.addEventListener("click", function (e) {
     var btn = e.target.closest("[data-notes]");
     if (!btn) return;
-    list.textContent = "Yuklanmoqda...";
-    modal.hidden = false;
+    nlist.textContent = "Yuklanmoqda...";
+    nmodal.hidden = false;
     fetch("/admin/students/" + btn.dataset.notes + "/notes")
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        list.textContent = "";
-        if (!data.ok || !data.notes.length) { list.textContent = "Hozircha izoh yo'q."; return; }
+        nlist.textContent = "";
+        if (!data.ok || !data.notes.length) { nlist.textContent = "Hozircha izoh yo'q."; return; }
         data.notes.forEach(function (n) {
           var item = document.createElement("div");
           item.className = "note-item";
@@ -178,14 +337,25 @@
           meta.textContent = n.created + " · " + n.author;
           item.appendChild(body);
           item.appendChild(meta);
-          list.appendChild(item);
+          nlist.appendChild(item);
         });
       })
-      .catch(function () { list.textContent = "Tarmoq xatosi"; });
+      .catch(function () { nlist.textContent = "Tarmoq xatosi"; });
   });
-  document.getElementById("notes-close").addEventListener("click", function () { modal.hidden = true; });
-  modal.addEventListener("click", function (e) { if (e.target === modal) modal.hidden = true; });
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") modal.hidden = true; });
+  document.getElementById("notes-close").addEventListener("click", function () { nmodal.hidden = true; });
+  nmodal.addEventListener("click", function (e) { if (e.target === nmodal) nmodal.hidden = true; });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") nmodal.hidden = true; });
 })();
 </script>
+
+<!-- quick notes modal -->
+<div class="modal-backdrop" id="notes-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Talaba izohlari</h2>
+    <div id="notes-list"></div>
+    <div class="actions">
+      <button type="button" class="outline" id="notes-close">Yopish</button>
+    </div>
+  </div>
+</div>
 {% endblock %}

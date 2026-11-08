@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Sozlamalar</h1>
-<p class="page-sub">Ish vaqti va egaga xabar yuborish uchun chat ID.</p>
+<p class="page-sub">Ish vaqti, egaga xabar yuborish uchun chat ID va eslatmalar.</p>
 
 <div class="card">
   <form method="post" action="/admin/settings">
@@ -14,10 +14,48 @@
     <label>Owner chat ID (eganing Telegram raqami ID)</label>
     <input type="text" name="owner_chat_id" value="{{ owner_chat_id }}" placeholder="masalan: 123456789">
     <p class="hint">
-      Yangi lid haqidagi xabar va 24 soatlik eslatma shu chatga yuboriladi.
+      Yangi lid haqidagi xabar, 24 soatlik eslatma va test xabari shu chatga yuboriladi.
       ID ni bilish uchun botga <a href="https://t.me/userinfobot">@userinfobot</a> dan biror xabar yozing.
     </p>
+
+    <label style="display:inline-flex;align-items:center;gap:8px;margin-top:14px;">
+      <input type="checkbox" name="reminders_enabled" {{ 'checked' if reminders_enabled else '' }}>
+      Telegram eslatmalar yoqilgan (guruh boshlanishi, sinov darsi, qarzdorlar)
+    </label>
+    <p class="hint">
+      Eslatmalar faqat ish vaqti ichida yuboriladi ({{ work_start }}–{{ work_end }}).
+      Bir xil eslatma bir kunda bir marta ketadi.
+    </p>
+
     <div style="margin-top:8px"><button>Saqlash</button></div>
   </form>
 </div>
+
+<div class="card">
+  <h2>Test xabar yuborish</h2>
+  <p class="hint">Owner chat ID ga bitta test xabari yuboradi — eslatmalar kanali ishlayotganini tekshiradi.</p>
+  <button type="button" id="test-reminders">Test xabar yuborish</button>
+  <p id="test-result" class="hint" style="margin-top:8px"></p>
+</div>
+
+<script>
+(function () {
+  var btn = document.getElementById("test-reminders");
+  var result = document.getElementById("test-result");
+  btn.addEventListener("click", function () {
+    btn.disabled = true;
+    result.textContent = "Yuborilmoqda...";
+    fetch("/admin/reminders/test", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        result.textContent = data.message || (data.ok ? "Yuborildi" : "Xatolik");
+        btn.disabled = false;
+      })
+      .catch(function () {
+        result.textContent = "Tarmoq xatosi";
+        btn.disabled = false;
+      });
+  });
+})();
+</script>
 {% endblock %}

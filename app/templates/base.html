@@ -222,6 +222,7 @@
         <a href="/admin/kanban" class="{{ 'active' if active == 'kanban' else '' }}">Bugun</a>
         <a href="/admin/leads" class="{{ 'active' if active == 'leads' else '' }}">Lidlar</a>
         <a href="/admin/students" class="{{ 'active' if active == 'students' else '' }}">Talabalar</a>
+        <a href="/admin/debtors" class="{{ 'active' if active == 'debtors' else '' }}">Qarzdorlar</a>
         <details class="nav-group" {% if active in ('courses', 'groups', 'teachers', 'employees', 'ai', 'settings') %}open{% endif %}>
           <summary>Boshqaruv</summary>
           <a href="/admin/courses" class="{{ 'active' if active == 'courses' else '' }}">Kurslar</a>

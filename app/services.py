@@ -2,9 +2,10 @@
 import logging
 import random
 import re
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from .config import settings
@@ -20,6 +21,7 @@ from .models import (
     Group,
     Lead,
     LeadNote,
+    Payment,
     ProcessedUpdate,
     Setting,
     Student,
@@ -377,7 +379,9 @@ def build_dynamic_knowledge() -> str:
                 tname = teacher_name(course.teacher_id)
                 if tname:
                     parts.append(f"o'qituvchi: {tname}")
-            if course.price:
+            if course.price_sum:
+                parts.append(f"narx: {course.price_sum:,} so'm/oy".replace(",", " "))
+            elif course.price:
                 parts.append(f"narx: {course.price}")
             if course.duration:
                 parts.append(f"davomiylik: {course.duration}")
@@ -819,3 +823,209 @@ def add_student_note(student_id: int, text: str, author: str | None) -> StudentN
         session.commit()
         session.refresh(note)
     return note
+
+
+# ---------------------------------------------------------------------------
+# Money (whole so'm only — no floats) and debts
+# ---------------------------------------------------------------------------
+
+PAYMENT_METHODS = {
+    "naqd": "Naqd",
+    "karta": "Karta",
+    "click": "Click",
+    "payme": "Payme",
+    "boshqa": "Boshqa",
+}
+
+
+def _duration_months(duration_text: str | None) -> int | None:
+    """Parse "4 oy" / "2 yil" into months; None when unknown."""
+    if not duration_text:
+        return None
+    match = re.search(r"(\d+)\s*(oy|yil|month)", duration_text.lower())
+    if match is None:
+        return None
+    months = int(match.group(1))
+    if "yil" in match.group(2):
+        months *= 12
+    return months
+
+
+def monthly_price(student: Student, course: Course | None) -> int:
+    """Monthly price in so'm after the student's individual discount."""
+    if course is None or not course.price_sum:
+        return 0
+    price = course.price_sum
+    if student.discount_type == "percent" and student.discount_value:
+        price -= price * student.discount_value // 100
+    elif student.discount_type == "sum" and student.discount_value:
+        price -= student.discount_value
+    return max(price, 0)
+
+
+def student_periods(student: Student, course: Course | None) -> list[dict]:
+    """Month-by-month payment plan: expected / paid / status per period.
+
+    Periods run from the enrollment month; a course duration ("4 oy") caps
+    them when it can be parsed, otherwise all months up to today count.
+    """
+    price = monthly_price(student, course)
+    if student.enrolled_at is None or price <= 0:
+        return []
+    start = student.enrolled_at
+    today = datetime.now(TZ).date()
+    months_cap = _duration_months(course.duration if course else None) or 36
+    periods: list[dict] = []
+    year, month = start.year, start.month
+    with SessionLocal() as session:
+        rows = (
+            session.query(Payment.period, func.sum(Payment.amount))
+            .filter(Payment.student_id == student.id)
+            .group_by(Payment.period)
+            .all()
+        )
+    paid_by_period = {period: int(total or 0) for period, total in rows if period}
+    for _ in range(min(months_cap, 36)):
+        period = f"{year:04d}-{month:02d}"
+        if (year, month) > (today.year, today.month):
+            break
+        paid = paid_by_period.get(period, 0)
+        if paid >= price:
+            status = "tolangan"
+        elif paid > 0:
+            status = "qisman"
+        else:
+            status = "qarz"
+        periods.append(
+            {"period": period, "expected": price, "paid": paid, "status": status}
+        )
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return periods
+
+
+def student_debt(student: Student, course: Course | None) -> dict:
+    """Total debt and how many days late the oldest unpaid period is."""
+    price = monthly_price(student, course)
+    if price <= 0:
+        return {"debt": 0, "days_late": 0, "paid_total": 0, "total_expected": 0}
+    periods = student_periods(student, course)
+    today = datetime.now(TZ).date()
+    debt = sum(p["expected"] - p["paid"] for p in periods if p["expected"] > p["paid"])
+    days_late = 0
+    for p in periods:
+        if p["status"] != "qarz":
+            continue
+        year, month = int(p["period"][:4]), int(p["period"][5:7])
+        if month == 12:
+            month_end = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            month_end = date(year, month + 1, 1) - timedelta(days=1)
+        late = (today - month_end).days
+        days_late = max(days_late, late)
+    paid_total = sum(p["paid"] for p in periods)
+    return {
+        "debt": max(debt, 0),
+        "days_late": days_late,
+        "paid_total": paid_total,
+        "total_expected": sum(p["expected"] for p in periods),
+    }
+
+
+def get_debtors() -> list[dict]:
+    """All active students with a debt, sorted by debt (largest first)."""
+    result: list[dict] = []
+    with SessionLocal() as session:
+        students = (
+            session.query(Student)
+            .filter(Student.status.in_(["faol", "navbatda"]))
+            .all()
+        )
+        courses = {c.id: c for c in session.query(Course).all()}
+        groups = {g.id: g for g in session.query(Group).all()}
+    for student in students:
+        course = courses.get(
+            groups[student.group_id].course_id if student.group_id in groups else None
+        )
+        info = student_debt(student, course)
+        if info["debt"] <= 0:
+            continue
+        result.append(
+            {
+                "student": student,
+                "group": groups.get(student.group_id or 0),
+                "debt": info["debt"],
+                "days_late": info["days_late"],
+                "paid_total": info["paid_total"],
+            }
+        )
+    result.sort(key=lambda r: r["debt"], reverse=True)
+    return result
+
+
+def add_payment(
+    student_id: int,
+    amount: int,
+    paid_date: date | None,
+    method: str | None,
+    period: str | None,
+    note: str | None,
+    created_by: str | None,
+) -> Payment:
+    with SessionLocal() as session:
+        payment = Payment(
+            student_id=student_id,
+            amount=int(amount),
+            paid_date=paid_date,
+            method=method if method in PAYMENT_METHODS else None,
+            period=period or None,
+            note=(note or "").strip()[:200] or None,
+            created_by=created_by or None,
+        )
+        session.add(payment)
+        session.commit()
+        session.refresh(payment)
+    log.info("Payment added: student=%s amount=%s period=%s", student_id, amount, period)
+    return payment
+
+
+# ---------------------------------------------------------------------------
+# "Bugun" dashboard data
+# ---------------------------------------------------------------------------
+
+def today_overview() -> dict:
+    """The four 'Bugun' blocks: calls, trials, group starts, debtors."""
+    today = datetime.now(TZ).date()
+    tomorrow = today + timedelta(days=1)
+    with SessionLocal() as session:
+        call_leads = (
+            session.query(Lead)
+            .filter(
+                Lead.follow_up_at.isnot(None),
+                Lead.follow_up_at <= today,
+                Lead.status.in_(["new", "contacted", "trial"]),
+            )
+            .order_by(Lead.follow_up_at)
+            .all()
+        )
+        trial_leads = (
+            session.query(Lead)
+            .filter(Lead.trial_date.in_([today, tomorrow]), Lead.status == "trial")
+            .order_by(Lead.trial_date)
+            .all()
+        )
+        starting_groups = (
+            session.query(Group)
+            .filter(Group.starts_on == today, Group.is_enabled.is_(True))
+            .all()
+        )
+    debtor_count = len(get_debtors())
+    return {
+        "call_leads": call_leads,
+        "trial_leads": trial_leads,
+        "starting_groups": starting_groups,
+        "debtor_count": debtor_count,
+        "today": today,
+    }

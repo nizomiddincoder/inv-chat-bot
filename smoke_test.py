@@ -646,6 +646,155 @@ with SessionLocal() as s:
     s.commit()
 client.post(f"/admin/groups/{gid}/delete", headers=auth, follow_redirects=False)
 print("stage-2 cleanup OK")
+
+# --- 8f. Stage 3: payments, discounts, debtors, "Bugun", reminders ---
+from app.models import Course, Payment, ReminderLog  # noqa: E402
+from app.services import get_debtors, student_debt, student_periods  # noqa: E402
+
+# pre-clean (re-run safe)
+with SessionLocal() as s:
+    s.query(Payment).delete(synchronize_session=False)
+    s.query(ReminderLog).delete(synchronize_session=False)
+    s.query(Student).delete(synchronize_session=False)
+    s.query(Lead).filter(Lead.phone.in_(["+998936660011", "+998936660022"])).delete(synchronize_session=False)
+    s.query(Group).filter(Group.name == "Test guruh P").delete(synchronize_session=False)
+    s.query(Course).filter(Course.name == "Test kurs P").delete(synchronize_session=False)
+    s.commit()
+
+# course with numeric monthly price + duration 2 months
+client.post("/admin/courses/add", data={"name": "Test kurs P", "sort_order": "8", "price_sum": "500000", "duration": "2 oy"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    course_p = s.query(Course).filter(Course.name == "Test kurs P").one()
+    course_p_id = course_p.id
+# group with numeric start date
+client.post("/admin/groups/add", data={"name": "Test guruh P", "course_id": str(course_p_id), "capacity": "0", "starts_on": "2026-11-10"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    gp = s.query(Group).filter(Group.name == "Test guruh P").one()
+    gp_id = gp.id
+    assert gp.starts_on.isoformat() == "2026-11-10"
+
+# lead -> student
+client.post("/admin/leads/add", data={"full_name": "Doston Toshpulatov", "phone": "936660011", "course": "Test kurs P", "source": "instagram"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    lp = s.query(Lead).filter(Lead.phone == "+998936660011").one()
+client.post(f"/admin/leads/{lp.id}/status", data={"status": "enrolled", "group_id": str(gp_id)}, headers=auth)
+with SessionLocal() as s:
+    stp = s.query(Student).filter(Student.lead_id == lp.id).one()
+    stp_id = stp.id
+
+# enrolled this month -> 1 period (Nov), expected 500000, nothing late yet
+info = student_debt(stp, course_p)
+assert info["debt"] == 500000 and info["days_late"] == 0, info
+print("period debt math OK")
+
+# discount 20% -> monthly 400000 -> debt 400000
+client.post(f"/admin/students/{stp_id}/update", data={"full_name": "Doston Toshpulatov", "phone": "+998936660011",
+                                                      "group_id": str(gp_id), "status": "faol",
+                                                      "discount_type": "percent", "discount_value": "20"}, headers=auth)
+with SessionLocal() as s:
+    stp = s.get(Student, stp_id)  # re-fetch with the saved discount
+info = student_debt(stp, course_p)
+assert info["debt"] == 400000, info
+# pay 300000 for the first period -> debt 100000, first period "qisman"
+client.post("/admin/payments/add", data={"student_id": str(stp_id), "amount": "300000", "period": "2026-11", "method": "click", "note": "birinchi qism"}, headers=auth)
+with SessionLocal() as s:
+    stp = s.get(Student, stp_id)
+info = student_debt(stp, course_p)
+assert info["debt"] == 100000 and info["paid_total"] == 300000, info
+periods = student_periods(stp, course_p)
+assert periods[0]["status"] == "qisman" and periods[0]["paid"] == 300000
+print("discount + partial payment OK")
+
+# student card JSON
+r = client.get(f"/admin/students/{stp_id}/card", headers=auth)
+card = r.json()
+assert card["ok"] and card["money"]["monthly_price"] == 400000 and card["money"]["debt"] == 100000
+assert len(card["payments"]) == 1 and card["payments"][0]["method"] == "Click"
+assert len(card["periods"]) == 1
+print("student card JSON OK")
+
+# debtors page shows the student; sort links work
+r = client.get("/admin/debtors", headers=auth)
+assert "Doston" in r.text and "100 000" in r.text
+r = client.get("/admin/debtors?sort=late", headers=auth)
+assert r.status_code == 200
+print("debtors page OK")
+
+# delete the payment -> debt back to 400000
+with SessionLocal() as s:
+    pay_id = s.query(Payment).filter(Payment.student_id == stp_id).one().id
+client.post(f"/admin/payments/{pay_id}/delete", headers=auth)
+with SessionLocal() as s:
+    stp = s.get(Student, stp_id)
+info = student_debt(stp, course_p)
+assert info["debt"] == 400000
+print("payment delete OK")
+
+# "Bugun" page: overview blocks render (empty state + debtor count)
+r = client.get("/admin/kanban", headers=auth)
+assert "Qo'ng'iroq kerak" in r.text and "Bugun boshlanadigan guruhlar" in r.text
+assert "Bugun ishlar yo'q" in r.text  # empty state for at least one block
+print("'Bugun' dashboard blocks OK")
+
+# reminders: disabled -> nothing happens
+client.post("/admin/settings", data={"work_start": "09:00", "work_end": "20:00", "owner_chat_id": "111"}, headers=auth, follow_redirects=False)
+client.post("/admin/settings", data={"work_start": "09:00", "work_end": "20:00", "owner_chat_id": "111", "reminders_enabled": ""}, headers=auth, follow_redirects=False)
+from app.reminders import check_reminders, send_test_message  # noqa: E402
+import app.telegram_client as tgmod  # noqa: E402
+check_reminders()
+assert s.query(ReminderLog).count() == 0 if False else True
+with SessionLocal() as s:
+    assert s.query(ReminderLog).count() == 0
+print("reminders disabled -> no messages OK")
+
+# enabled + test message (mocked Telegram)
+tgmod._post = lambda method, payload: ({"message_id": 1}, None)
+r = client.post("/admin/reminders/test", headers=auth)
+assert r.json()["ok"] is True, r.json()
+with SessionLocal() as s:
+    assert s.query(ReminderLog).filter(ReminderLog.kind == "test", ReminderLog.status == "sent").count() == 1
+
+# enabled -> group-start reminder fires (group starts tomorrow), dedup on second run
+# (give the lead a real Telegram chat id — manual leads have none, which is
+#  exactly what the "skipped: no chat id" path covers)
+from datetime import datetime as _dt, timedelta as _td  # noqa: E402
+from app.services import TZ as _TZ  # noqa: E402
+with SessionLocal() as s:
+    s.get(Group, gp_id).starts_on = _dt.now(_TZ).date() + _td(days=1)
+    lp_db = s.get(Lead, lp.id)
+    lp_db.telegram_user_id = 888001
+    s.commit()
+client.post("/admin/settings", data={"work_start": "00:00", "work_end": "23:59", "owner_chat_id": "111", "reminders_enabled": "on"}, headers=auth, follow_redirects=False)
+check_reminders()
+with SessionLocal() as s:
+    sent1 = s.query(ReminderLog).filter(ReminderLog.kind == "group_start", ReminderLog.status == "sent").count()
+    assert sent1 == 1, sent1
+check_reminders()
+with SessionLocal() as s:
+    skipped = s.query(ReminderLog).filter(ReminderLog.kind == "group_start", ReminderLog.status == "skipped").count()
+    assert skipped == 1, skipped
+print("group-start reminder + daily dedup OK")
+
+# outside work hours -> nothing new is sent
+client.post("/admin/settings", data={"work_start": "23:00", "work_end": "23:10", "owner_chat_id": "111", "reminders_enabled": "on"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    s.query(ReminderLog).delete(synchronize_session=False)
+    s.commit()
+check_reminders()
+with SessionLocal() as s:
+    assert s.query(ReminderLog).count() == 0
+print("outside work hours -> silent OK")
+
+# cleanup stage-3 rows
+with SessionLocal() as s:
+    s.query(Payment).delete(synchronize_session=False)
+    s.query(ReminderLog).delete(synchronize_session=False)
+    s.query(Student).delete(synchronize_session=False)
+    s.query(Lead).filter(Lead.id == lp.id).delete(synchronize_session=False)
+    s.query(Group).filter(Group.id == gp_id).delete(synchronize_session=False)
+    s.query(Course).filter(Course.id == course_p_id).delete(synchronize_session=False)
+    s.commit()
+print("stage-3 cleanup OK")
 # settings page renders
 r = client.get("/admin/settings", headers=auth)
 assert r.status_code == 200 and "Owner chat ID" in r.text

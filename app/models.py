@@ -38,6 +38,8 @@ class Course(Base):
     # CRM details (also fed to Claude as knowledge):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     price: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    # Monthly price in so'm (integer) used for payment/debt calculations.
+    price_sum: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration: Mapped[str | None] = mapped_column(String(60), nullable=True)
     teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -52,9 +54,11 @@ class Group(Base):
     name: Mapped[str] = mapped_column(String(120))
     course_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    # Free-text schedule like "Du-Chor-Ju 16:00" and start date "1-dekabr".
+    # Free-text schedule like "Du-Chor-Ju 16:00" and a display start date.
     schedule: Mapped[str | None] = mapped_column(String(200), nullable=True)
     start_date: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    # Real start date (for the "Bugun" dashboard and day-before reminders).
+    starts_on: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     # Seats available; NULL/0 = no limit set yet.
     capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # ochiq | toldi | tugagan ("toldi" is set automatically when seats fill up)
@@ -144,8 +148,9 @@ class Student(Base):
     status: Mapped[str] = mapped_column(String(20), default="faol", index=True)
     # The lead this student was created from — keeps the history link.
     lead_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    # Payments are planned for the next stage; free-form note for now.
-    payment_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Individual discount on the monthly price: fixed so'm sum or a percent.
+    discount_type: Mapped[str | None] = mapped_column(String(10), nullable=True)  # sum | percent
+    discount_value: Mapped[int | None] = mapped_column(Integer, nullable=True)
     enrolled_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -160,6 +165,40 @@ class StudentNote(Base):
     student_id: Mapped[int] = mapped_column(Integer, index=True)
     text: Mapped[str] = mapped_column(Text)
     author: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Payment(Base):
+    """A payment record for a student. Amounts are whole so'm (never float)."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    student_id: Mapped[int] = mapped_column(Integer, index=True)
+    amount: Mapped[int] = mapped_column(Integer)  # so'm, integer
+    paid_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # naqd | karta | click | payme | boshqa
+    method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Which month this payment covers, "YYYY-MM" (installments).
+    period: Mapped[str | None] = mapped_column(String(7), nullable=True, index=True)
+    note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReminderLog(Base):
+    """Journal of every reminder the bot tried to send (dedup + audit)."""
+
+    __tablename__ = "reminder_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # group_start | trial | debt
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    target_id: Mapped[int] = mapped_column(Integer, index=True)  # student or lead id
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # sent | failed | skipped (no chat id / dedup)
+    status: Mapped[str] = mapped_column(String(20))
+    detail: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

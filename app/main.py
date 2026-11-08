@@ -11,6 +11,7 @@ from .config import settings
 from .database import init_db
 from .followup import start_followup_thread
 from .handlers import handle_update
+from .reminders import start_reminders_thread
 from .services import claim_update
 from .telegram_client import set_webhook
 
@@ -33,6 +34,7 @@ async def lifespan(_: object):
     init_db()          # create tables + seed defaults (safe to run every start)
     set_webhook()      # tell Telegram where to deliver updates
     start_followup_thread()  # 24h follow-up reminders, background thread
+    start_reminders_thread()  # group/trial/debt Telegram reminders, background thread
     if claude_client.is_enabled():
         logging.getLogger("startup").info(
             "Claude mode ON: model=%s, knowledge files: %d",

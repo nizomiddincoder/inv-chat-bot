@@ -73,6 +73,10 @@
       <input type="text" name="start_date" id="new-start" placeholder="1-dekabr">
     </div>
     <div class="fld">
+      <label for="new-starts-on">Aniq sana (eslatma uchun)</label>
+      <input type="date" name="starts_on" id="new-starts-on" title="Guruh boshlanishidan 1 kun oldin talabalarga eslatma ketadi">
+    </div>
+    <div class="fld">
       <label for="new-capacity">O'rinlar soni</label>
       <input type="number" name="capacity" id="new-capacity" value="0" title="0 — cheklanmagan. To'lganda guruh avtomatik 'To'ldi' bo'ladi">
     </div>
@@ -114,6 +118,10 @@
   <div class="fld">
     <label>Boshlanish</label>
     <input type="text" data-f="start_date" value="{{ g.start_date or '' }}" data-orig="{{ g.start_date or '' }}" placeholder="1-dekabr">
+  </div>
+  <div class="fld">
+    <label>Aniq sana</label>
+    <input type="date" data-f="starts_on" value="{{ g.starts_on.isoformat() if g.starts_on else '' }}" title="Eslatma shu sanadan 1 kun oldin ketadi">
   </div>
   <div class="fld">
     <label>O'rinlar</label>
