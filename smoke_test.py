@@ -10,6 +10,7 @@ import os
 os.environ["WEBHOOK_SECRET"] = "test-secret"
 os.environ["ADMIN_USER"] = "admin"
 os.environ["ADMIN_PASSWORD"] = "test-pass"
+os.environ["OWNER_CHAT_ID"] = "111"  # the business owner is also the bot admin
 os.environ.pop("DATABASE_URL", None)  # use the local SQLite fallback
 
 logging.disable(logging.CRITICAL)
@@ -83,7 +84,7 @@ client.post(
 assert len(sent) == n
 print("group message ignored OK")
 
-# --- 6. Full flow: button -> name -> phone ---
+# --- 6. Full flow: button -> name -> (edit name) -> phone ---
 client.post(
     "/webhook",
     json={"callback_query": {"id": 1, "business_connection_id": "conn1",
@@ -105,14 +106,31 @@ def business_text(text: str) -> None:
 
 business_text("Ali Valiyev")
 assert "Telefon raqamingizni qoldiring" in sent[-1][1]["text"]
+
+# --- 6b. edited_business_message: user fixes the name while waiting for phone ---
+client.post(
+    "/webhook",
+    json={"edited_business_message": {"business_connection_id": "conn1", "chat": {"id": 222, "type": "private"},
+          "from": {"id": 222, "first_name": "Ali", "is_bot": False}, "text": "Aziza Karimova"}},
+    headers=HEADER,
+)
+assert "tahrirlandi" in sent[-1][1]["text"], sent[-1][1]["text"]
+assert sent[-1][1].get("business_connection_id") == "conn1"
+print("edited_business_message (name fix) OK")
+
 business_text("99 123 45 67")  # spaced local format
-assert "qabul qilindi" in sent[-1][1]["text"]
+all_texts = [p.get("text", "") for m, p in sent if m == "sendMessage"]
+assert any("qabul qilindi" in t for t in all_texts), all_texts[-1]
+# owner receives the new-lead notification
+owner_notifs = [p for m, p in sent if m == "sendMessage" and p.get("chat_id") == 111]
+assert any("Yangi lid" in p["text"] for p in owner_notifs), owner_notifs
+print("owner notification OK")
 
 with SessionLocal() as s:
     lead = s.query(Lead).filter(Lead.telegram_user_id == 222).one()
     assert lead.phone == "+998991234567", lead.phone
     assert lead.course == "Buxgalteriya 0 dan", lead.course
-    assert lead.full_name == "Ali Valiyev", lead.full_name
+    assert lead.full_name == "Aziza Karimova", lead.full_name
 print("full flow OK ->", lead.full_name, lead.phone, lead.course)
 
 # --- 7. Dedup: same user again -> still exactly one lead ---
@@ -125,6 +143,59 @@ with SessionLocal() as s:
     assert count == 1, count
 print("dedup OK")
 
+# --- 7b. Owner-only admin commands via the business chat ---
+n = len(sent)
+client.post(
+    "/webhook",
+    json={"business_message": {"business_connection_id": "conn1", "chat": {"id": 111, "type": "private"},
+          "from": {"id": 111, "is_bot": False}, "text": "/lidlar"}},
+    headers=HEADER,
+)
+assert len(sent) > n, "owner got no reply to /lidlar"
+assert sent[-1][0] == "sendMessage"
+assert "Lidlar statistikasi" in sent[-1][1]["text"], sent[-1][1]["text"]
+assert sent[-1][1].get("business_connection_id") == "conn1"
+assert sent[-1][1].get("chat_id") == 111
+
+# owner's normal chatter is still ignored (restriction is only for commands)
+n = len(sent)
+client.post(
+    "/webhook",
+    json={"business_message": {"business_connection_id": "conn1", "chat": {"id": 111, "type": "private"},
+          "from": {"id": 111, "is_bot": False}, "text": "salom do'stim"}},
+    headers=HEADER,
+)
+assert len(sent) == n, "owner's non-command message got a reply!"
+print("owner admin command OK (normal chatter still ignored)")
+
+# /kurslar and /yordam for the owner
+client.post(
+    "/webhook",
+    json={"business_message": {"business_connection_id": "conn1", "chat": {"id": 111, "type": "private"},
+          "from": {"id": 111, "is_bot": False}, "text": "/kurslar"}},
+    headers=HEADER,
+)
+assert "Kurslar" in sent[-1][1]["text"]
+print("/kurslar OK")
+
+# --- 7c. Non-owner gets NO admin commands: /lidlar from a stranger is rejected ---
+client.post(
+    "/webhook",
+    json={"message": {"chat": {"id": 999, "type": "private"},
+          "from": {"id": 999, "first_name": "Stranger", "is_bot": False}, "text": "/lidlar"}},
+    headers=HEADER,
+)
+assert "faqat admin uchun" in sent[-1][1]["text"], sent[-1][1]["text"]
+# and the normal flow still works for that stranger afterwards
+client.post(
+    "/webhook",
+    json={"message": {"chat": {"id": 999, "type": "private"},
+          "from": {"id": 999, "first_name": "Stranger", "is_bot": False}, "text": "salom"}},
+    headers=HEADER,
+)
+assert "Assalomu alaykum" in sent[-1][1]["text"], sent[-1][1]["text"]
+print("admin command blocked for non-owner OK (flow unaffected)")
+
 # --- 8. Admin panel auth ---
 auth = {"Authorization": "Basic " + base64.b64encode(b"admin:test-pass").decode()}
 r = client.get("/admin/leads", follow_redirects=False)
@@ -135,9 +206,9 @@ assert "Lidlar" in r.text
 # courses page renders
 r = client.get("/admin/courses", headers=auth)
 assert r.status_code == 200 and "Kurslar" in r.text
-# messages page renders all 7 templates
+# messages page renders all 8 templates
 r = client.get("/admin/messages", headers=auth)
-assert r.status_code == 200 and r.text.count("<textarea") == 7
+assert r.status_code == 200 and r.text.count("<textarea") == 8
 # settings page renders
 r = client.get("/admin/settings", headers=auth)
 assert r.status_code == 200 and "Owner chat ID" in r.text

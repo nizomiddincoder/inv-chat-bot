@@ -56,8 +56,9 @@ MESSAGE_LABELS = {
     "after_name": "3. Ism qabul qilingandan keyin (telefon so'raladi)",
     "after_phone": "4. Telefon noto'g'ri kiritilsa",
     "name_invalid": "5. Ism noto'g'ri kiritilsa",
-    "finish": "6. Yakuniy xabar (lid qabul qilindi) — {first_name} ishlatiladi",
-    "out_of_hours": "7. Ish vaqtidan tashqari qo'shiladigan satr",
+    "name_edited": "6. Ism tahrirlangandagi tasdiq (xabar o'zgartirilsa)",
+    "finish": "7. Yakuniy xabar (lid qabul qilindi) — {first_name} ishlatiladi",
+    "out_of_hours": "8. Ish vaqtidan tashqari qo'shiladigan satr",
 }
 
 

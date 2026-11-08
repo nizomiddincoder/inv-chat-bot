@@ -4,12 +4,20 @@ Main conversation flow (state stored in DB per chat_id):
   step 0 -> welcome + course buttons
   step 1 -> course chosen, waiting for the user's name
   step 2 -> name saved, waiting for the phone number -> lead created
+
+Owner-only admin commands (/lidlar, /kurslar, /yordam) are gated by
+OWNER_CHAT_ID and work both in the business chat and in the bot's own chat.
+The OWNER_CHAT_ID restriction applies ONLY to these admin commands — the
+normal lead flow is never blocked or changed by it.
 """
 import logging
+from datetime import datetime, timezone
+
+from sqlalchemy import func
 
 from . import telegram_client as tg
 from .database import SessionLocal
-from .models import BusinessConnectionRecord, utcnow
+from .models import BusinessConnectionRecord, Course, Lead, utcnow
 from .services import (
     TZ,
     get_enabled_courses,
@@ -29,6 +37,24 @@ log = logging.getLogger("bot.handlers")
 # Words that restart the flow from any step
 RESET_COMMANDS = ("/start", "bekor qilish")
 
+# Commands only the owner (OWNER_CHAT_ID) can use
+ADMIN_COMMANDS = ("/lidlar", "/statistika", "/kurslar", "/yordam", "/admin")
+
+ADMIN_HELP = (
+    "🛠 Admin buyruqlari:\n"
+    "/lidlar — lidlar statistikasi va oxirgi lidlar\n"
+    "/kurslar — kurslar ro'yxati\n"
+    "/yordam — shu yordam xabari\n\n"
+    "Bu buyruqlar faqat OWNER_CHAT_ID egasiga ishlaydi."
+)
+
+STATUS_LABELS_UZ = {
+    "new": "Yangi",
+    "contacted": "Aloqaga chiqildi",
+    "enrolled": "O'qishga yozildi",
+    "rejected": "Rad etildi",
+}
+
 
 def handle_update(update: dict) -> None:
     """Dispatch one raw Telegram update to the right handler."""
@@ -37,7 +63,7 @@ def handle_update(update: dict) -> None:
     elif "business_message" in update:
         _handle_business_message(update["business_message"])
     elif "edited_business_message" in update:
-        log.debug("Ignoring edited_business_message")
+        _handle_edited_business_message(update["edited_business_message"])
     elif "message" in update:
         _handle_private_message(update["message"])
     elif "callback_query" in update:
@@ -89,18 +115,24 @@ def _handle_business_message(message: dict) -> None:
     if user.get("is_bot"):
         return
 
-    # Never reply to the business owner's own messages.
+    text = message.get("text")
+
+    # Never run the lead flow for the business owner's own messages.
+    # Exception: admin commands, gated by OWNER_CHAT_ID (see below).
     if connection_id:
         with SessionLocal() as session:
             record = session.get(BusinessConnectionRecord, connection_id)
         owner_id = record.owner_user_id if record else None
         if owner_id and user.get("id") == owner_id:
-            log.debug("Ignoring owner's own message (user_id=%s)", user.get("id"))
+            if text:
+                _maybe_handle_admin_command(chat["id"], text, connection_id)
+            else:
+                log.debug("Ignoring owner's own non-text message")
             return
     else:
         log.warning("business_message without connection id — cannot verify owner")
 
-    if not message.get("text"):
+    if not text:
         tg.send_message(
             chat.get("id"),
             "Iltimos, matn ko'rinishida yozing 🙏",
@@ -108,7 +140,52 @@ def _handle_business_message(message: dict) -> None:
         )
         return
 
-    _process_flow(chat["id"], user, message["text"], connection_id)
+    _process_flow(chat["id"], user, text, connection_id)
+
+
+def _handle_edited_business_message(message: dict) -> None:
+    """The user edited one of their messages.
+
+    Only one case is acted on: while the bot waits for the phone number
+    (step 2), editing the name fixes the stored name. Other edits are logged
+    and ignored so they can never re-trigger the flow or create duplicates.
+    """
+    connection_id = message.get("business_connection_id")
+    chat = message.get("chat", {})
+    if chat.get("type") != "private":
+        return
+    user = message.get("from") or {}
+    if user.get("is_bot"):
+        return
+
+    # Owner edits are never part of the lead flow.
+    if connection_id:
+        with SessionLocal() as session:
+            record = session.get(BusinessConnectionRecord, connection_id)
+        owner_id = record.owner_user_id if record else None
+        if owner_id and user.get("id") == owner_id:
+            return
+
+    text = (message.get("text") or "").strip()
+    if not text:
+        return
+
+    chat_id = chat["id"]
+    state = get_state(chat_id)
+    if state["step"] == 2:
+        name = validate_name(text)
+        if name and name != state["temp_name"]:
+            set_state(chat_id, step=2, course=state["course"], temp_name=name)
+            tg.send_message(
+                chat_id,
+                render("name_edited"),
+                business_connection_id=connection_id,
+            )
+            log.info("Edited name accepted for chat %s -> %s", chat_id, name)
+        return
+    log.info(
+        "edited_business_message from chat %s ignored (step=%s)", chat_id, state["step"]
+    )
 
 
 def _handle_private_message(message: dict) -> None:
@@ -120,10 +197,14 @@ def _handle_private_message(message: dict) -> None:
     user = message.get("from") or {}
     if user.get("is_bot"):
         return
-    if not message.get("text"):
+    text = message.get("text")
+    if not text:
         tg.send_message(chat.get("id"), "Iltimos, matn ko'rinishida yozing 🙏")
         return
-    _process_flow(chat["id"], user, message["text"], business_connection_id=None)
+    # Admin commands (OWNER_CHAT_ID only) are intercepted before the flow.
+    if _maybe_handle_admin_command(chat["id"], text, business_connection_id=None):
+        return
+    _process_flow(chat["id"], user, text, business_connection_id=None)
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +292,98 @@ def _process_flow(chat_id: int, user: dict, text: str, business_connection_id: s
         )
     else:
         _send_welcome(chat_id, user, business_connection_id)
+
+
+# ---------------------------------------------------------------------------
+# Owner-only admin commands (gated strictly by OWNER_CHAT_ID)
+# ---------------------------------------------------------------------------
+
+def _extract_command(text: str) -> str:
+    """/lidlar@MyBot -> /lidlar"""
+    return text.strip().split()[0].split("@")[0].lower()
+
+
+def _maybe_handle_admin_command(chat_id: int, text: str, business_connection_id: str | None) -> bool:
+    """Run an admin command if it is one. Returns True when the text was a command.
+
+    The OWNER_CHAT_ID restriction applies ONLY here — the normal lead flow is
+    never affected by it.
+    """
+    command = _extract_command(text)
+    if command not in ADMIN_COMMANDS:
+        return False
+
+    owner_chat_id = get_owner_chat_id()
+    if owner_chat_id is None:
+        log.warning(
+            "Admin command %s received but OWNER_CHAT_ID is not set (env or admin "
+            "Settings page) — ignoring", command,
+        )
+        return True
+    if chat_id != owner_chat_id:
+        log.info("Admin command %s rejected: chat %s is not OWNER_CHAT_ID", command, chat_id)
+        tg.send_message(
+            chat_id,
+            "Bu buyruq faqat admin uchun 🙅",
+            business_connection_id=business_connection_id,
+        )
+        return True
+
+    if command in ("/lidlar", "/statistika"):
+        reply = _build_leads_summary()
+    elif command == "/kurslar":
+        reply = _build_courses_summary()
+    else:  # /yordam, /admin
+        reply = ADMIN_HELP
+
+    tg.send_message(chat_id, reply, business_connection_id=business_connection_id)
+    log.info("Admin command %s executed for chat %s", command, chat_id)
+    return True
+
+
+def _build_leads_summary() -> str:
+    """Statistics for the /lidlar command."""
+    today_start_utc = (
+        datetime.now(TZ)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(timezone.utc)
+    )
+    with SessionLocal() as session:
+        total = session.query(Lead).count()
+        today = session.query(Lead).filter(Lead.created_at >= today_start_utc).count()
+        status_rows = session.query(Lead.status, func.count(Lead.id)).group_by(Lead.status).all()
+        last_leads = session.query(Lead).order_by(Lead.created_at.desc()).limit(5).all()
+
+    counts = {status: 0 for status in STATUS_LABELS_UZ}
+    for status, count in status_rows:
+        counts[status] = count
+
+    lines = [
+        "📊 Lidlar statistikasi",
+        f"Jami: {total} | Bugun: {today}",
+        " | ".join(f"{label}: {counts.get(status, 0)}" for status, label in STATUS_LABELS_UZ.items()),
+    ]
+    if last_leads:
+        lines.append("\nOxirgi lidlar:")
+        for index, lead in enumerate(last_leads, start=1):
+            created = lead.created_at.astimezone(TZ).strftime("%d.%m %H:%M")
+            lines.append(f"{index}. {lead.full_name or '—'} — {lead.phone or '—'} — {lead.course or '—'} ({created})")
+    else:
+        lines.append("\nHozircha lid yo'q.")
+    return "\n".join(lines)
+
+
+def _build_courses_summary() -> str:
+    """Course list for the /kurslar command."""
+    with SessionLocal() as session:
+        courses = session.query(Course).order_by(Course.sort_order, Course.id).all()
+    lines = ["📚 Kurslar:"]
+    for course in courses:
+        mark = "✅" if course.is_enabled else "⛔ (o'chirilgan)"
+        lines.append(f"{mark} {course.name}")
+    if not courses:
+        lines.append("Hozircha kurs yo'q. Admin panelda qo'shing.")
+    return "\n".join(lines)
 
 
 def _send_welcome(chat_id: int, user: dict, business_connection_id: str | None) -> None:

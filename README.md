@@ -134,10 +134,33 @@ Owner:    gets a private message: name, phone, course, username, time
 ```
 
 - `/start` or **"bekor qilish"** restarts the flow at any moment.
+- If the visitor **edits** a message while the bot waits for the phone number,
+  the edited name replaces the stored one and the bot confirms it. Other edits
+  are ignored so they never create duplicate leads.
 - The same Telegram user or same phone never creates a duplicate lead — the
   existing one is updated.
 - **24-hour follow-up:** if an open lead gets no reply for 24 hours, the bot
   sends **one** reminder to the *owner* (never to the visitor).
+
+## Admin commands inside Telegram (owner only)
+
+The owner can send these commands to the bot (in the bot's own chat or right in
+the business chat). They work **only** for the account whose ID is in
+`OWNER_CHAT_ID` (env variable or the admin panel → Sozlamalar):
+
+| Command | What it shows |
+|---------|---------------|
+| `/lidlar` (or `/statistika`) | Total leads, today's leads, counts by status, last 5 leads |
+| `/kurslar` | Course list with enabled/disabled marks |
+| `/yordam` (or `/admin`) | This help text |
+
+Everyone else who types these commands gets *"Bu buyruq faqat admin uchun 🙅"*
+(in the bot chat) or simply the normal welcome flow (in the business chat).
+The restriction affects **only** these commands — the visitor flow never
+depends on `OWNER_CHAT_ID`.
+
+> Note: the bot also ignores the business account owner's normal (non-command)
+> messages, so you can keep chatting with customers yourself.
 
 ## Test checklist (do this after deploying)
 

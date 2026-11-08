@@ -36,6 +36,9 @@ DEFAULT_MESSAGES: dict[str, str] = {
     "name_invalid": (
         "Kechirasiz, ismni to'g'ri yozing (2 dan 50 gacha harf, raqam va havolasiz)."
     ),
+    "name_edited": (
+        "Ismingiz tahrirlandi ✅ Endi telefon raqamingizni yuboring."
+    ),
     "finish": "Rahmat! Ma'lumotlaringiz qabul qilindi, admin tez orada bog'lanadi.",
     "out_of_hours": "Hozir ish vaqtimiz tugagan, ertaga javob beramiz.",
 }
