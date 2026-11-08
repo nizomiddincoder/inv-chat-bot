@@ -355,12 +355,16 @@
           <svg class="i" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 14.5h2"/></svg>
           <span class="lbl">Qarzdorlar</span>
         </a>
-        <details class="nav-group" {% if active in ('courses', 'groups', 'teachers', 'employees', 'ai', 'settings') %}open{% endif %}>
+        <details class="nav-group" {% if active in ('courses', 'groups', 'teachers', 'employees', 'ai', 'settings', 'report', 'templates', 'audit') %}open{% endif %}>
           <summary>
             <svg class="i" viewBox="0 0 24 24"><path d="M4 8h10M4 16h7"/><circle cx="18" cy="8" r="2.5"/><circle cx="15" cy="16" r="2.5"/></svg>
             <span class="lbl">Boshqaruv</span>
           </summary>
           <div class="inner">
+            <a href="/admin/report" class="{{ 'active' if active == 'report' else '' }}">
+              <svg class="i" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/></svg>
+              <span class="lbl">Hisobot</span>
+            </a>
             <a href="/admin/courses" class="{{ 'active' if active == 'courses' else '' }}">
               <svg class="i" viewBox="0 0 24 24"><path d="M4 19V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zm0 0a2 2 0 0 0 2 2h13"/></svg>
               <span class="lbl">Kurslar</span>
@@ -380,6 +384,14 @@
             <a href="/admin/ai" class="{{ 'active' if active == 'ai' else '' }}">
               <svg class="i" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z"/><path d="M19 16l.9 2.1L22 19l-2.1.9L19 22l-.9-2.1L16 19l2.1-.9L19 16z"/></svg>
               <span class="lbl">AI Javoblar</span>
+            </a>
+            <a href="/admin/templates" class="{{ 'active' if active == 'templates' else '' }}">
+              <svg class="i" viewBox="0 0 24 24"><path d="M4 5h16M4 5v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V5M8 9h8M8 13h5"/></svg>
+              <span class="lbl">Shablonlar</span>
+            </a>
+            <a href="/admin/audit" class="{{ 'active' if active == 'audit' else '' }}">
+              <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M9 11h4M11 9v4"/></svg>
+              <span class="lbl">Jurnal</span>
             </a>
             <a href="/admin/settings" class="{{ 'active' if active == 'settings' else '' }}">
               <svg class="i" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h9M17 17h3"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="15" cy="17" r="2"/></svg>

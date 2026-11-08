@@ -108,7 +108,8 @@
     {% endfor %}
   </select>
   <input type="text" name="q" value="{{ f_q }}" placeholder="Ism yoki telefon" aria-label="Qidirish">
-  <a class="btn outline" style="margin-left:auto" href="/admin/leads/export?{{ query_string }}">CSV yuklab olish</a>
+  <a class="btn outline" style="margin-left:auto" href="/admin/leads/export?{{ query_string }}">CSV</a>
+  <a class="btn outline" href="/admin/leads/export.xlsx?{{ query_string }}">Excel (.xlsx)</a>
 </form>
 
 <div class="table-wrap tbl-card">
@@ -164,6 +165,7 @@
       <td>
         <span class="last-note">{% if last_notes.get(lead.id) %}{{ last_notes[lead.id].text }}{% else %}—{% endif %}</span>
         <button type="button" class="note-open" data-notes-lead="{{ lead.id }}">Tarix</button>
+        <button type="button" class="note-open" data-msg-lead="{{ lead.id }}">Xabar</button>
         <input type="text" class="note-input" placeholder="Izoh qo'shish" data-note-lead="{{ lead.id }}" aria-label="Yangi izoh">
       </td>
     </tr>
@@ -187,6 +189,26 @@
     <div class="actions">
       <button type="button" class="outline" id="enroll-cancel">Bekor qilish</button>
       <button type="button" id="enroll-confirm">Yozish</button>
+    </div>
+  </div>
+</div>
+
+<!-- send message modal -->
+<div class="modal-backdrop" id="msg-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Xabar yuborish</h2>
+    <label for="msg-template">Shablon</label>
+    <select id="msg-template">
+      {% for t in message_templates %}
+      <option value="{{ t.key }}">{{ t.title }}</option>
+      {% endfor %}
+    </select>
+    <label for="msg-text">Xabar matni</label>
+    <textarea id="msg-text" rows="5"></textarea>
+    <p class="hint">Telegram orqali yuboriladi va izohlar tarixiga yoziladi.</p>
+    <div class="actions">
+      <button type="button" class="outline" id="msg-cancel">Bekor qilish</button>
+      <button type="button" id="msg-send">Yuborish</button>
     </div>
   </div>
 </div>
@@ -413,6 +435,41 @@
   document.getElementById("notes-close").addEventListener("click", function () { modal.hidden = true; });
   modal.addEventListener("click", function (e) { if (e.target === modal) modal.hidden = true; });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") modal.hidden = true; });
+
+  // --- send Telegram message from a template ---
+  var msgModal = document.getElementById("msg-modal");
+  var msgTemplate = document.getElementById("msg-template");
+  var msgText = document.getElementById("msg-text");
+  var currentMsgLead = null;
+
+  function loadMsgText() {
+    if (!currentMsgLead) return;
+    msgText.value = "Yuklanmoqda...";
+    fetch("/admin/leads/" + currentMsgLead + "/message-text?template=" + encodeURIComponent(msgTemplate.value))
+      .then(function (r) { return r.json(); })
+      .then(function (data) { msgText.value = data.ok ? data.text : (data.error || "Xatolik"); })
+      .catch(function () { msgText.value = "Tarmoq xatosi"; });
+  }
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-msg-lead]");
+    if (!btn) return;
+    currentMsgLead = btn.dataset.msgLead;
+    msgModal.hidden = false;
+    loadMsgText();
+  });
+  msgTemplate.addEventListener("change", loadMsgText);
+  document.getElementById("msg-cancel").addEventListener("click", function () { msgModal.hidden = true; });
+  msgModal.addEventListener("click", function (e) { if (e.target === msgModal) msgModal.hidden = true; });
+  document.getElementById("msg-send").addEventListener("click", function () {
+    if (!currentMsgLead) return;
+    post("/admin/leads/" + currentMsgLead + "/send-message", {
+      template: msgTemplate.value, text: msgText.value
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok) { showToast(data.error || "Yuborilmadi"); return; }
+      msgModal.hidden = true;
+      showToast("Xabar yuborildi");
+    }).catch(function () { showToast("Tarmoq xatosi"); });
+  });
 
   // --- add lead form: validate name + phone ---
   var addForm = document.getElementById("add-form");

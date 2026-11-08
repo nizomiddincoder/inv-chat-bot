@@ -202,6 +202,35 @@ class ReminderLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class MessageTemplate(Base):
+    """Editable Telegram message template ({ism}, {kurs}, {summa}, ...)."""
+
+    __tablename__ = "message_templates"
+
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    title: Mapped[str] = mapped_column(String(120))
+    text: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuditLog(Base):
+    """Append-only audit trail: who changed what, when (never edited/deleted)."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user: Mapped[str] = mapped_column(String(120))  # admin login or "bot"
+    # lead | student | payment | group | course | teacher | employee | message
+    entity: Mapped[str] = mapped_column(String(20), index=True)
+    entity_id: Mapped[int] = mapped_column(Integer, index=True)
+    # yaratildi | ozgartirildi | ochirildi | yuborildi
+    action: Mapped[str] = mapped_column(String(20))
+    field: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class BotMessage(Base):
     """Editable bot message templates (admin panel -> Messages page)."""
 

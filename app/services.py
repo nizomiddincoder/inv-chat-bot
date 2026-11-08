@@ -2,7 +2,7 @@
 import logging
 import random
 import re
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
@@ -13,6 +13,7 @@ from .crm import push_lead
 from .database import SessionLocal
 from .models import (
     AiSetting,
+    AuditLog,
     BotMessage,
     ChatState,
     ChatHistory,
@@ -21,6 +22,7 @@ from .models import (
     Group,
     Lead,
     LeadNote,
+    MessageTemplate,
     Payment,
     ProcessedUpdate,
     Setting,
@@ -572,6 +574,11 @@ def upsert_lead(
 
         session.commit()
         session.refresh(lead)
+        log_audit(
+            "bot", "lead", lead.id,
+            "yaratildi" if lead.repeat_count == 0 else "ozgartirildi",
+            None, None, f"{full_name}, {phone}" + (" (takroriy murojaat)" if lead.repeat_count else ""),
+        )
         # CRM adapter hook (currently a no-op stub, see crm.py)
         push_lead(lead)
         return lead
@@ -1028,4 +1035,279 @@ def today_overview() -> dict:
         "starting_groups": starting_groups,
         "debtor_count": debtor_count,
         "today": today,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Audit log (append-only)
+# ---------------------------------------------------------------------------
+
+def log_audit(
+    user: str,
+    entity: str,
+    entity_id: int,
+    action: str,
+    field: str | None = None,
+    old_value: object = None,
+    new_value: object = None,
+) -> None:
+    """Append one entry to the audit trail. Rows are never edited/deleted."""
+    with SessionLocal() as session:
+        session.add(
+            AuditLog(
+                user=user or "bot",
+                entity=entity,
+                entity_id=entity_id,
+                action=action,
+                field=field,
+                old_value=str(old_value) if old_value is not None else None,
+                new_value=str(new_value) if new_value is not None else None,
+            )
+        )
+        session.commit()
+
+
+def audit_changes(user: str, entity: str, entity_id: int, before: dict, after: dict) -> int:
+    """Compare two snapshots and log every changed field. Returns change count."""
+    changed = 0
+    for key, old in before.items():
+        new = after.get(key)
+        if old != new:
+            log_audit(user, entity, entity_id, "ozgartirildi", key, old, new)
+            changed += 1
+    return changed
+
+
+def get_audit_log(user: str = "", entity: str = "", day: date | None = None) -> list[AuditLog]:
+    """Filtered audit entries, newest first (admin-only page uses this)."""
+    with SessionLocal() as session:
+        query = session.query(AuditLog)
+        if user:
+            query = query.filter(AuditLog.user == user)
+        if entity:
+            query = query.filter(AuditLog.entity == entity)
+        if day is not None:
+            start = datetime(day.year, day.month, day.day, tzinfo=TZ).astimezone(timezone.utc)
+            end = start + timedelta(days=1)
+            query = query.filter(AuditLog.created_at >= start, AuditLog.created_at < end)
+        return query.order_by(AuditLog.id.desc()).limit(500).all()
+
+
+def audit_users() -> list[str]:
+    """Distinct actors in the audit log (for the filter dropdown)."""
+    with SessionLocal() as session:
+        rows = session.query(AuditLog.user).distinct().all()
+    return sorted({r[0] for r in rows})
+
+
+# ---------------------------------------------------------------------------
+# Message templates ({ism}, {kurs}, {summa}, ... filled per recipient)
+# ---------------------------------------------------------------------------
+
+DEFAULT_TEMPLATES: dict[str, tuple[str, str]] = {
+    "sinov_taklif": (
+        "Sinov darsiga taklif",
+        "{ism}, sizni \"{kurs}\" kursiga sinov darsiga taklif qilamiz! "
+        "Sana va vaqtni kelishib olamiz — qiziqqan bo'lsangiz javob yozing.",
+    ),
+    "narxlar": (
+        "Narxlar",
+        "{ism}, \"{kurs}\" kursining oylik narxi {summa}. "
+        "Qo'shimcha savollar bo'lsa bemalol yozing!",
+    ),
+    "guruh_toldi": (
+        "Guruh to'ldi",
+        "{ism}, afsuski \"{guruh}\" guruhi to'lgan. Sizni navbatga yozdik — "
+        "o'rin bo'shash bilanoq xabar beramiz.",
+    ),
+    "yozilish_eslatma": (
+        "Yozilish uchun eslatma",
+        "{ism}, \"{kurs}\" kursiga yozilishni eslab qo'ygan edik. "
+        "Guruh {sana} boshlanadi. Yozilishni tasdiqlaysizmi?",
+    ),
+    "qarz_eslatma": (
+        "Qarz eslatma",
+        "{ism}, \"{kurs}\" kursi bo'yicha {summa} qarzingiz mavjud. "
+        "To'lov uchun markazga murojaat qiling.",
+    ),
+}
+
+
+def get_templates() -> list[MessageTemplate]:
+    with SessionLocal() as session:
+        return session.query(MessageTemplate).order_by(MessageTemplate.key).all()
+
+
+def _month_label(period: str | None) -> str:
+    try:
+        year, month = int(period[:4]), int(period[5:7])
+        return date(year, month, 1).strftime("%m.%Y")
+    except (ValueError, TypeError, IndexError):
+        return period or "—"
+
+
+def fill_template_text(text: str, lead: Lead | None = None, student: Student | None = None) -> str:
+    """Replace {ism}, {telefon}, {kurs}, {guruh}, {summa}, {qarz}, {sana}."""
+    person_name, phone, username = "", "", ""
+    course, group_name = "", ""
+    summa, qarz, sana = "", "", datetime.now(TZ).strftime("%d.%m.%Y")
+    if lead is not None:
+        person_name = lead.full_name or ""
+        phone = lead.phone or ""
+        username = lead.username or ""
+        course = lead.course or ""
+        with SessionLocal() as session:
+            group = session.get(Group, lead.group_id) if lead.group_id else None
+            # if this lead already became a student, money variables can be filled
+            student_for_lead = (
+                session.query(Student).filter(Student.lead_id == lead.id).first()
+            )
+        group_name = group.name if group else ""
+        if student_for_lead and student_for_lead.group_id:
+            with SessionLocal() as session:
+                s_group = session.get(Group, student_for_lead.group_id)
+                s_course = (
+                    session.get(Course, s_group.course_id) if s_group and s_group.course_id else None
+                )
+            if s_course:
+                course = s_course.name or course
+                group_name = s_group.name or group_name
+                summa = f"{monthly_price(student_for_lead, s_course):,} so'm".replace(",", " ")
+                qarz = f"{student_debt(student_for_lead, s_course)['debt']:,} so'm".replace(",", " ")
+    if student is not None:
+        person_name = student.full_name or person_name
+        phone = student.phone or phone
+        username = student.username or username
+        with SessionLocal() as session:
+            group = session.get(Group, student.group_id) if student.group_id else None
+            course_obj = (
+                session.get(Course, group.course_id)
+                if group and group.course_id
+                else None
+            )
+        course = course_obj.name if course_obj else course
+        group_name = group.name if group else group_name
+        if course_obj:
+            summa = f"{monthly_price(student, course_obj):,} so'm".replace(",", " ")
+            qarz = f"{student_debt(student, course_obj)['debt']:,} so'm".replace(",", " ")
+    result = text
+    replacements = {
+        "{ism}": person_name or "Mijoz",
+        "{telefon}": phone,
+        "{username}": ("@" + username) if username else "",
+        "{kurs}": course or "kurs",
+        "{guruh}": group_name or "guruh",
+        "{summa}": summa,
+        "{qarz}": qarz,
+        "{sana}": sana,
+    }
+    for key, value in replacements.items():
+        result = result.replace(key, value)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Monthly report
+# ---------------------------------------------------------------------------
+
+def report_data(month: str) -> dict:
+    """All figures for the report page, month = "YYYY-MM" (Tashkent)."""
+    year, mon = int(month[:4]), int(month[5:7])
+    start_local = datetime(year, mon, 1, tzinfo=TZ)
+    end_local = (
+        datetime(year + 1, 1, 1, tzinfo=TZ) if mon == 12
+        else datetime(year, mon + 1, 1, tzinfo=TZ)
+    )
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+
+    with SessionLocal() as session:
+        leads = (
+            session.query(Lead)
+            .filter(Lead.created_at >= start_utc, Lead.created_at < end_utc)
+            .all()
+        )
+        payments = (
+            session.query(Payment)
+            .filter(Payment.paid_date >= start_local.date(), Payment.paid_date < end_local.date())
+            .all()
+        )
+        courses = {c.id: c for c in session.query(Course).all()}
+        groups = {g.id: g for g in session.query(Group).all()}
+
+    total_leads = len(leads)
+    enrolled = [l for l in leads if l.status == "enrolled"]
+    rejected = [l for l in leads if l.status == "rejected"]
+    conversion = round(len(enrolled) * 100 / total_leads) if total_leads else 0
+
+    by_source: dict[str, dict] = {}
+    for lead in leads:
+        key = SOURCE_ALIASES.get(lead.source or "", lead.source or "")
+        entry = by_source.setdefault(key, {"total": 0, "enrolled": 0})
+        entry["total"] += 1
+        if lead.status == "enrolled":
+            entry["enrolled"] += 1
+    source_rows = [
+        {"source": SOURCES.get(key, key), "total": v["total"],
+         "enrolled": v["enrolled"],
+         "conversion": round(v["enrolled"] * 100 / v["total"]) if v["total"] else 0}
+        for key, v in by_source.items()
+    ]
+    source_rows.sort(key=lambda r: r["total"], reverse=True)
+
+    by_course: dict[str, dict] = {}
+    for lead in enrolled:
+        entry = by_course.setdefault(lead.course or "—", {"students": 0, "revenue": 0})
+        entry["students"] += 1
+    revenue_total = 0
+    by_course_pay: dict[str, int] = {}
+    with SessionLocal() as session:
+        for payment in payments:
+            revenue_total += payment.amount
+            key = "—"
+            student = session.get(Student, payment.student_id)
+            if student and student.group_id:
+                group = groups.get(student.group_id)
+                course = courses.get(group.course_id) if group else None
+                key = course.name if course else "—"
+            by_course_pay[key] = by_course_pay.get(key, 0) + payment.amount
+    for course_name, revenue in by_course_pay.items():
+        by_course.setdefault(course_name, {"students": 0, "revenue": 0})["revenue"] = revenue
+    course_rows = [
+        {"course": name, "students": v["students"], "revenue": v["revenue"]}
+        for name, v in by_course.items()
+    ]
+    course_rows.sort(key=lambda r: r["revenue"], reverse=True)
+
+    debt_total = sum(row["debt"] for row in get_debtors())
+
+    reject_counts: dict[str, int] = {}
+    for lead in rejected:
+        label = REJECT_REASONS.get(lead.reject_reason or "", lead.reject_reason or "Boshqa")
+        reject_counts[label] = reject_counts.get(label, 0) + 1
+    reject_rows = sorted(reject_counts.items(), key=lambda kv: kv[1], reverse=True)
+
+    method_totals: dict[str, int] = {}
+    for payment in payments:
+        method_totals[payment.method or ""] = (
+            method_totals.get(payment.method or "", 0) + payment.amount
+        )
+    method_rows = [
+        {"method": PAYMENT_METHODS.get(method, method or "—"), "total": total}
+        for method, total in method_totals.items()
+    ]
+    method_rows.sort(key=lambda r: r["total"], reverse=True)
+
+    return {
+        "month": month,
+        "month_label": start_local.strftime("%m.%Y"),
+        "total_leads": total_leads,
+        "total_enrolled": len(enrolled),
+        "conversion": conversion,
+        "source_rows": source_rows,
+        "course_rows": course_rows,
+        "revenue_total": revenue_total,
+        "debt_total": debt_total,
+        "reject_rows": reject_rows,
+        "method_rows": method_rows,
     }

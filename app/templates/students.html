@@ -72,6 +72,10 @@
     <option value="{{ value }}" {{ 'selected' if value == f_status else '' }}>{{ label }}</option>
     {% endfor %}
   </select>
+  <div class="actions" style="margin-left:auto">
+    <a class="btn outline" href="/admin/students/export.csv">CSV</a>
+    <a class="btn outline" href="/admin/students/export.xlsx">Excel (.xlsx)</a>
+  </div>
 </form>
 
 <div class="table-wrap">
@@ -111,7 +115,8 @@
       </td>
       <td class="nowrap">
         <button type="button" class="card-open" data-card="{{ s.id }}">Ochish</button>
-        <button type="button" class="note-open" data-notes="{{ s.id }}">Izoh</button>
+        <button type="button" class="note-open" data-notes="{{ s.id }}">Tarix</button>
+        <button type="button" class="note-open" data-msg="{{ s.id }}">Xabar</button>
       </td>
     </tr>
   {% else %}
@@ -346,8 +351,66 @@
   document.getElementById("notes-close").addEventListener("click", function () { nmodal.hidden = true; });
   nmodal.addEventListener("click", function (e) { if (e.target === nmodal) nmodal.hidden = true; });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") nmodal.hidden = true; });
+
+  // --- send Telegram message from a template ---
+  var sMsgModal = document.getElementById("smsg-modal");
+  var sMsgTemplate = document.getElementById("smsg-template");
+  var sMsgText = document.getElementById("smsg-text");
+  var currentMsgStudent = null;
+
+  function loadStudentMsgText() {
+    if (!currentMsgStudent) return;
+    sMsgText.value = "Yuklanmoqda...";
+    fetch("/admin/students/" + currentMsgStudent + "/message-text?template=" + encodeURIComponent(sMsgTemplate.value))
+      .then(function (r) { return r.json(); })
+      .then(function (data) { sMsgText.value = data.ok ? data.text : (data.error || "Xatolik"); })
+      .catch(function () { sMsgText.value = "Tarmoq xatosi"; });
+  }
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-msg]");
+    if (!btn) return;
+    currentMsgStudent = btn.dataset.msg;
+    sMsgModal.hidden = false;
+    loadStudentMsgText();
+  });
+  sMsgTemplate.addEventListener("change", loadStudentMsgText);
+  document.getElementById("smsg-cancel").addEventListener("click", function () { sMsgModal.hidden = true; });
+  sMsgModal.addEventListener("click", function (e) { if (e.target === sMsgModal) sMsgModal.hidden = true; });
+  document.getElementById("smsg-send").addEventListener("click", function () {
+    if (!currentMsgStudent) return;
+    var body = new URLSearchParams({ template: sMsgTemplate.value, text: sMsgText.value });
+    fetch("/admin/students/" + currentMsgStudent + "/send-message", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok) { showToast(data.error || "Yuborilmadi"); return; }
+      sMsgModal.hidden = true;
+      showToast("Xabar yuborildi");
+    }).catch(function () { showToast("Tarmoq xatosi"); });
+  });
 })();
 </script>
+
+<!-- send message modal -->
+<div class="modal-backdrop" id="smsg-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2>Xabar yuborish</h2>
+    <label for="smsg-template">Shablon</label>
+    <select id="smsg-template">
+      {% for t in message_templates %}
+      <option value="{{ t.key }}">{{ t.title }}</option>
+      {% endfor %}
+    </select>
+    <label for="smsg-text">Xabar matni</label>
+    <textarea id="smsg-text" rows="5"></textarea>
+    <p class="hint">Telegram orqali yuboriladi va izohlar tarixiga yoziladi.</p>
+    <div class="actions">
+      <button type="button" class="outline" id="smsg-cancel">Bekor qilish</button>
+      <button type="button" id="smsg-send">Yuborish</button>
+    </div>
+  </div>
+</div>
 
 <!-- quick notes modal -->
 <div class="modal-backdrop" id="notes-modal" hidden>

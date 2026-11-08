@@ -41,8 +41,8 @@ def _seed_defaults() -> None:
 
     Existing rows are never overwritten — the admin panel owns them after that.
     """
-    from .models import BotMessage, Course, Setting
-    from .services import DEFAULT_MESSAGES
+    from .models import BotMessage, Course, MessageTemplate, Setting
+    from .services import DEFAULT_MESSAGES, DEFAULT_TEMPLATES
 
     with SessionLocal() as session:
         if session.query(Course).count() == 0:
@@ -53,6 +53,10 @@ def _seed_defaults() -> None:
         for key, text in DEFAULT_MESSAGES.items():
             if session.get(BotMessage, key) is None:
                 session.add(BotMessage(key=key, text=text))
+
+        for key, (title, text) in DEFAULT_TEMPLATES.items():
+            if session.get(MessageTemplate, key) is None:
+                session.add(MessageTemplate(key=key, title=title, text=text))
 
         if session.get(Setting, "work_start") is None:
             session.add(Setting(key="work_start", value=settings.WORK_START))

@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .rep-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .rep-stat { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-sm); padding: 14px 18px; }
+  .rep-stat .lbl { font-size: 12.5px; color: var(--muted); }
+  .rep-stat .val { font-size: 22px; font-weight: 700; margin-top: 3px; white-space: nowrap; }
+  .rep-stat .val.debt { color: var(--red); }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .chart-card { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-sm); padding: 16px; }
+  .chart-card h2 { font-size: 14px; }
+  .chart { width: 100%; height: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  table.rep { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .rep th { font-size: 11px; text-transform: uppercase; color: var(--faint); text-align: left; padding: 8px; }
+  .rep td { padding: 8px; border-top: 1px solid var(--border); }
+  .export-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .empty-block { color: var(--muted); }
+</style>
+
+<h1>Hisobot</h1>
+<p class="page-sub">Oy bo'yicha ko'rsatkichlar — lidlar, konversiya, tushum va qarz.</p>
+
+<form method="get" action="/admin/report" class="filters">
+  <select name="month" aria-label="Oy">
+    {% for m in months_options %}
+    <option value="{{ m }}" {{ 'selected' if m == data.month else '' }}>{{ m }}</option>
+    {% endfor %}
+  </select>
+  <div class="export-row" style="margin-left:auto">
+    <a class="btn outline" href="/admin/report/export.csv?month={{ data.month }}">CSV</a>
+    <a class="btn outline" href="/admin/report/export.xlsx?month={{ data.month }}">Excel (.xlsx)</a>
+  </div>
+</form>
+
+{% if not has_any %}
+<div class="card"><div class="empty-block">Bu oyda ma'lumot yo'q.</div></div>
+{% endif %}
+
+<div class="rep-stats">
+  <div class="rep-stat"><div class="lbl">Lidlar soni</div><div class="val">{{ data.total_leads }}</div></div>
+  <div class="rep-stat"><div class="lbl">O'qishga yozilganlar</div><div class="val">{{ data.total_enrolled }}</div></div>
+  <div class="rep-stat"><div class="lbl">Konversiya</div><div class="val">{{ data.conversion }}%</div></div>
+  <div class="rep-stat"><div class="lbl">Jami tushum</div><div class="val">{{ data.revenue_total | som }} so'm</div></div>
+  <div class="rep-stat"><div class="lbl">Jami qarz</div><div class="val debt">{{ data.debt_total | som }} so'm</div></div>
+</div>
+
+<div class="charts">
+  <div class="chart-card">
+    <h2>Lidlar manba bo'yicha</h2>
+    {% if bar_svg %}{{ bar_svg | safe }}
+    <div class="legend"></div>
+    {% else %}<div class="empty-block">Bu oyda ma'lumot yo'q.</div>{% endif %}
+    {% if data.source_rows %}
+    <table class="rep">
+      <thead><tr><th>Manba</th><th>Lidlar</th><th>Yozilgan</th><th>Konversiya</th></tr></thead>
+      <tbody>
+      {% for r in data.source_rows %}
+        <tr><td>{{ r.source }}</td><td>{{ r.total }}</td><td>{{ r.enrolled }}</td><td>{{ r.conversion }}%</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+  <div class="chart-card">
+    <h2>Tushum to'lov usuli bo'yicha</h2>
+    {% if pie_svg %}
+    <div style="max-width:220px;margin:0 auto;">{{ pie_svg | safe }}</div>
+    <div class="legend">
+      {% for item in pie_items %}
+      <span><i style="background:{{ pie_colors[loop.index0 % pie_colors | length] }}"></i>{{ item[0] }} — {{ item[1] | som }} so'm</span>
+      {% endfor %}
+    </div>
+    {% else %}<div class="empty-block">Bu oyda ma'lumot yo'q.</div>{% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px">
+  <h2>Kurs bo'yicha yozilganlar va tushum</h2>
+  {% if data.course_rows %}
+  <table class="rep">
+    <thead><tr><th>Kurs</th><th>Yozilganlar</th><th>Tushum (so'm)</th></tr></thead>
+    <tbody>
+    {% for r in data.course_rows %}
+      <tr><td>{{ r.course }}</td><td>{{ r.students }}</td><td>{{ r.revenue | som }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<div class="empty-block">Bu oyda ma'lumot yo'q.</div>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Rad etish sabablari</h2>
+  {% if data.reject_rows %}
+  <table class="rep">
+    <thead><tr><th>Sabab</th><th>Soni</th></tr></thead>
+    <tbody>
+    {% for label, count in data.reject_rows %}
+      <tr><td>{{ label }}</td><td>{{ count }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<div class="empty-block">Bu oyda ma'lumot yo'q.</div>{% endif %}
+</div>
+{% endblock %}

@@ -24,7 +24,20 @@ from ..auth import (
 from ..config import settings
 from ..database import SessionLocal
 from .. import reminders
-from ..models import Course, Group, Lead, Payment, ReminderLog, Student, StudentNote, Teacher
+from .. import telegram_client as tg
+from ..models import (
+    AuditLog,
+    Course,
+    Group,
+    Lead,
+    MessageTemplate,
+    Payment,
+    ReminderLog,
+    Student,
+    StudentNote,
+    Teacher,
+    utcnow,
+)
 from ..services import (
     AI_KNOWLEDGE_KEY,
     AI_STYLE_KEY,
@@ -38,19 +51,26 @@ from ..services import (
     add_lead_note,
     add_payment,
     add_student_note,
+    audit_changes,
+    audit_users,
     enroll_lead,
+    fill_template_text,
     get_ai_text,
     get_all_courses,
+    get_audit_log,
     get_debtors,
     get_employees,
     get_lead_notes,
     get_setting,
     get_student_notes,
     get_students_filtered,
+    get_templates,
     get_teachers,
     get_work_hours,
+    log_audit,
     monthly_price,
     normalize_phone,
+    report_data,
     set_ai_text,
     set_setting,
     set_student_status,
@@ -264,6 +284,7 @@ def leads_page(
             "sources": SOURCES,
             "employees": get_employees(enabled_only=True),
             "enroll_groups": _enroll_groups(),
+            "message_templates": get_templates(),
             "today": datetime.now(TZ).date(),
             "f_course": course,
             "f_status": status,
@@ -283,7 +304,7 @@ def add_lead_manual(
     source: str = Form("boshqa"),
     assigned_to: int = Form(0),
     follow_up_at: str = Form(""),
-    _: str = Depends(check_auth),
+    user: str = Depends(check_auth),
 ):
     """Lead added by hand from the admin panel (dedup by phone)."""
     full_name = full_name.strip()
@@ -299,6 +320,7 @@ def add_lead_manual(
         source=source,
         assigned_to=assigned_to or None,
     )
+    log_audit(user, "lead", lead.id, "yaratildi", None, None, f"{full_name}, {normalized}")
     if follow_up_at:
         with SessionLocal() as session:
             db_lead = session.get(Lead, lead.id)
@@ -309,7 +331,7 @@ def add_lead_manual(
     return RedirectResponse(url="/admin/leads?saved=1", status_code=303)
 
 
-def _apply_status(lead_id: int, status: str, reason: str, group_id: int) -> dict:
+def _apply_status(lead_id: int, status: str, reason: str, group_id: int, actor: str = "bot") -> dict:
     """Shared status change: reject reason check + student creation on enroll."""
     if status not in STATUS_LABELS:
         return {"ok": False, "error": "Noma'lum holat", "code": 400}
@@ -319,15 +341,23 @@ def _apply_status(lead_id: int, status: str, reason: str, group_id: int) -> dict
         lead = session.get(Lead, lead_id)
         if lead is None:
             return {"ok": False, "error": "Lid topilmadi", "code": 404}
+        old_status = lead.status
         lead.status = status
         lead.reject_reason = reason if status == "rejected" else None
         session.commit()
+    audit_changes(
+        actor, "lead", lead_id,
+        {"holat": old_status, "rad_etish_sababi": reason if old_status == "rejected" else None},
+        {"holat": status, "rad_etish_sababi": reason if status == "rejected" else None},
+    )
 
     waiting = False
     student_id = None
     if status == "enrolled":
         student, waiting = enroll_lead(lead_id, group_id or None)
         student_id = student.id
+        log_audit(actor, "student", student.id, "yaratildi", None, None,
+                  f"{student.full_name}, guruh: {student.group_id or '-'}")
     log.info("Lead %s status -> %s (reason=%s, group=%s)", lead_id, status, reason or "-", group_id or "-")
     return {"ok": True, "status": status, "waiting": waiting, "student_id": student_id}
 
@@ -338,14 +368,14 @@ def update_lead_status(
     status: str = Form(...),
     reason: str = Form(""),
     group_id: int = Form(0),
-    _: str = Depends(check_auth),
+    user: str = Depends(check_auth),
 ):
     """Change a lead's status.
 
     "Rad etildi" requires a reject reason; "O'qishga yozildi" creates the
     student profile (waiting list if the group is full).
     """
-    result = _apply_status(lead_id, status, reason, group_id)
+    result = _apply_status(lead_id, status, reason, group_id, actor=user)
     if not result["ok"]:
         return JSONResponse(result, status_code=result["code"])
     return JSONResponse(result)
@@ -633,10 +663,10 @@ def move_lead(
     status: str = Form(...),
     reason: str = Form(""),
     group_id: int = Form(0),
-    _: str = Depends(check_auth),
+    user: str = Depends(check_auth),
 ):
     """JSON endpoint for the kanban drag & drop (card moved to a new column)."""
-    result = _apply_status(lead_id, status, reason, group_id)
+    result = _apply_status(lead_id, status, reason, group_id, actor=user)
     if not result["ok"]:
         return JSONResponse(result, status_code=result["code"])
     return JSONResponse({"ok": True, "lead_id": lead_id, "status": status,
@@ -920,8 +950,441 @@ def delete_group(group_id: int, _: None = Depends(check_auth)):
 
 
 # ---------------------------------------------------------------------------
-# Debtors
+# Monthly report (Boshqaruv > Hisobot)
 # ---------------------------------------------------------------------------
+
+PIE_COLORS = ["#5B6CF0", "#14B8A6", "#F59E0B", "#22C55E", "#EF4444", "#9AA0B0"]
+
+
+def _bar_svg(items: list[tuple[str, int]]) -> str:
+    """Simple vertical bar chart (no external libraries)."""
+    if not items:
+        return ""
+    width, height, pad_top, pad_bottom = 560, 190, 24, 34
+    bar_area = height - pad_top - pad_bottom
+    max_value = max(v for _, v in items) or 1
+    slot = width / len(items)
+    bar_w = min(slot * 0.55, 64)
+    parts = [f'<svg viewBox="0 0 {width} {height}" role="img" class="chart">']
+    parts.append(f'<line x1="0" y1="{height - pad_bottom}" x2="{width}" y2="{height - pad_bottom}" stroke="var(--border)" stroke-width="1"/>')
+    for index, (label, value) in enumerate(items):
+        bar_h = max(round(value / max_value * bar_area), 2)
+        x = slot * index + (slot - bar_w) / 2
+        y = height - pad_bottom - bar_h
+        parts.append(
+            f'<rect x="{x:.1f}" y="{y}" width="{bar_w:.1f}" height="{bar_h}" rx="4" fill="var(--primary)"></rect>'
+        )
+        parts.append(
+            f'<text x="{x + bar_w / 2:.1f}" y="{y - 6}" text-anchor="middle" fill="var(--text)" font-size="12">{value}</text>'
+        )
+        short = label if len(label) <= 10 else label[:9] + "…"
+        parts.append(
+            f'<text x="{x + bar_w / 2:.1f}" y="{height - pad_bottom + 16}" text-anchor="middle" fill="var(--muted)" font-size="11">{short}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _pie_svg(items: list[tuple[str, int]]) -> str:
+    """Simple donut chart built from stroke-dasharray circles."""
+    total = sum(v for _, v in items)
+    if not items or total <= 0:
+        return ""
+    radius = 62
+    circumference = 2 * 3.14159 * radius
+    offset = 0
+    parts = [
+        f'<svg viewBox="0 0 160 160" role="img" class="chart">'
+        f'<g transform="translate(80,80) rotate(-90)">'
+        f'<circle r="{radius}" fill="none" stroke="var(--hover)" stroke-width="22"/>'
+    ]
+    for index, (_, value) in enumerate(items):
+        length = value / total * circumference
+        color = PIE_COLORS[index % len(PIE_COLORS)]
+        parts.append(
+            f'<circle r="{radius}" fill="none" stroke="{color}" stroke-width="22" '
+            f'stroke-dasharray="{length:.2f} {circumference - length:.2f}" '
+            f'stroke-dashoffset="{-offset:.2f}"></circle>'
+        )
+        offset += length
+    parts.append("</g></svg>")
+    return "".join(parts)
+
+
+@router.get("/report")
+def report_page(request: Request, month: str = "", _: str = Depends(check_auth)):
+    """Monthly CRM report: leads, conversion, sources, courses, revenue, debt."""
+    if not month or len(month) != 7 or not month[:4].isdigit():
+        month = datetime.now(TZ).strftime("%Y-%m")
+    data = report_data(month)
+    bar_items = [(r["source"], r["total"]) for r in data["source_rows"]]
+    pie_items = [(r["method"], r["total"]) for r in data["method_rows"]]
+    has_any = data["total_leads"] or data["revenue_total"] or data["total_enrolled"]
+    months_options = []
+    now = datetime.now(TZ)
+    for back in range(6):
+        m = now.month - back
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        months_options.append(f"{y:04d}-{m:02d}")
+    return templates.TemplateResponse(
+        request,
+        "report.html",
+        {
+            "data": data,
+            "bar_svg": _bar_svg(bar_items),
+            "pie_svg": _pie_svg(pie_items),
+            "pie_items": pie_items,
+            "pie_colors": PIE_COLORS,
+            "months_options": months_options,
+            "has_any": has_any,
+            "active": "report",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Exports (CSV for Excel + real .xlsx)
+# ---------------------------------------------------------------------------
+
+def _csv_response(rows: list[list], filename: str) -> Response:
+    buffer = io.StringIO()
+    buffer.write("\ufeff")  # BOM so Excel shows Uzbek letters correctly
+    writer = csv.writer(buffer, delimiter=";")
+    writer.writerows(rows)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def _xlsx_response(rows: list[list], filename: str) -> Response:
+    """Real .xlsx via openpyxl (numbers stay numbers for Excel formulas)."""
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Hisobot"[:31]
+    for row in rows:
+        sheet.append(row)
+    for column_cells in sheet.columns:
+        length = max((len(str(c.value or "")) for c in column_cells), default=8)
+        sheet.column_dimensions[column_cells[0].column_letter].width = min(max(length + 2, 10), 40)
+    output = io.BytesIO()
+    workbook.save(output)
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def _leads_rows() -> list[list]:
+    leads_list = _filtered_leads("", "", "")
+    employees = {e.id: e.full_name for e in get_employees()}
+    rows = [["ID", "Ism", "Telefon", "Kurs", "Username", "Manba", "Mas'ul", "Holat",
+             "Rad etish sababi", "Sinov dorsi", "Keyingi qo'ng'iroq", "Takroriy", "Yaratildi"]]
+    for lead in leads_list:
+        rows.append([
+            lead.id,
+            lead.full_name or "",
+            lead.phone or "",
+            lead.course or "",
+            lead.username or "",
+            source_label(lead.source),
+            employees.get(lead.assigned_to or 0, ""),
+            STATUS_LABELS.get(lead.status, lead.status),
+            REJECT_REASONS.get(lead.reject_reason or "", "") if lead.status == "rejected" else "",
+            lead.trial_date.strftime("%d.%m.%Y") if lead.trial_date else "",
+            lead.follow_up_at.strftime("%d.%m.%Y") if lead.follow_up_at else "",
+            "ha" if (lead.repeat_count or 0) > 0 else "",
+            _format_tashkent(lead.created_at),
+        ])
+    return rows
+
+
+def _students_rows() -> list[list]:
+    students = get_students_filtered("", 0, "")
+    with SessionLocal() as session:
+        groups = {g.id: g for g in session.query(Group).all()}
+        courses = {c.id: c for c in session.query(Course).all()}
+    rows = [["ID", "Ism", "Telefon", "Username", "Guruh", "Kurs", "Holat",
+             "Chegirma", "Yozilgan sana", "Jami to'langan", "Qarz"]]
+    for student in students:
+        group = groups.get(student.group_id or 0)
+        course = courses.get(group.course_id) if group else None
+        debt = student_debt(student, course)
+        discount = ""
+        if student.discount_type == "percent":
+            discount = f"{student.discount_value}%"
+        elif student.discount_type == "sum":
+            discount = f"{student.discount_value} so'm"
+        rows.append([
+            student.id,
+            student.full_name or "",
+            student.phone or "",
+            student.username or "",
+            group.name if group else "",
+            course.name if course else "",
+            STUDENT_STATUSES.get(student.status, student.status),
+            discount,
+            student.enrolled_at.strftime("%d.%m.%Y") if student.enrolled_at else "",
+            debt["paid_total"],
+            debt["debt"],
+        ])
+    return rows
+
+
+def _payments_rows() -> list[list]:
+    with SessionLocal() as session:
+        payments = session.query(Payment).order_by(Payment.id.desc()).limit(2000).all()
+        students = {s.id: s for s in session.query(Student).all()}
+    rows = [["ID", "Talaba", "Summa (so'm)", "Sana", "Usul", "Davr", "Izoh", "Kiritdi"]]
+    for payment in payments:
+        student = students.get(payment.student_id)
+        rows.append([
+            payment.id,
+            student.full_name if student else f"#{payment.student_id}",
+            payment.amount,
+            payment.paid_date.strftime("%d.%m.%Y") if payment.paid_date else "",
+            PAYMENT_METHODS.get(payment.method or "", payment.method or ""),
+            payment.period or "",
+            payment.note or "",
+            payment.created_by or "",
+        ])
+    return rows
+
+
+def _report_rows(month: str) -> list[list]:
+    data = report_data(month)
+    rows = [["Hisobot", data["month_label"]],
+            ["Lidlar soni", data["total_leads"]],
+            ["O'qishga yozilganlar", data["total_enrolled"]],
+            ["Konversiya, %", data["conversion"]],
+            ["Jami tushum (so'm)", data["revenue_total"]],
+            ["Jami qarz (so'm)", data["debt_total"]],
+            [],
+            ["Manba", "Lidlar", "Yozilganlar", "Konversiya, %"]]
+    for r in data["source_rows"]:
+        rows.append([r["source"], r["total"], r["enrolled"], r["conversion"]])
+    rows.append([])
+    rows.append(["Kurs", "Yozilganlar", "Tushum (so'm)"])
+    for r in data["course_rows"]:
+        rows.append([r["course"], r["students"], r["revenue"]])
+    rows.append([])
+    rows.append(["Rad etish sababi", "Soni"])
+    for label, count in data["reject_rows"]:
+        rows.append([label, count])
+    return rows
+
+
+@router.get("/leads/export.xlsx")
+def export_leads_xlsx(_: str = Depends(check_auth)):
+    return _xlsx_response(_leads_rows(), "lidlar.xlsx")
+
+
+@router.get("/students/export.csv")
+def export_students_csv(_: str = Depends(check_auth)):
+    return _csv_response(_students_rows(), "talabalar.csv")
+
+
+@router.get("/students/export.xlsx")
+def export_students_xlsx(_: str = Depends(check_auth)):
+    return _xlsx_response(_students_rows(), "talabalar.xlsx")
+
+
+@router.get("/payments/export.csv")
+def export_payments_csv(_: str = Depends(check_auth)):
+    return _csv_response(_payments_rows(), "tolovlar.csv")
+
+
+@router.get("/payments/export.xlsx")
+def export_payments_xlsx(_: str = Depends(check_auth)):
+    return _xlsx_response(_payments_rows(), "tolovlar.xlsx")
+
+
+@router.get("/report/export.csv")
+def export_report_csv(month: str = "", _: str = Depends(check_auth)):
+    if not month or len(month) != 7 or not month[:4].isdigit():
+        month = datetime.now(TZ).strftime("%Y-%m")
+    return _csv_response(_report_rows(month), f"hisobot-{month}.csv")
+
+
+@router.get("/report/export.xlsx")
+def export_report_xlsx(month: str = "", _: str = Depends(check_auth)):
+    if not month or len(month) != 7 or not month[:4].isdigit():
+        month = datetime.now(TZ).strftime("%Y-%m")
+    return _xlsx_response(_report_rows(month), f"hisobot-{month}.xlsx")
+
+
+# ---------------------------------------------------------------------------
+# Message templates (Boshqaruv > Shablonlar) + sending
+# ---------------------------------------------------------------------------
+
+def _recipient_chat_id(lead_id: int = 0, student_id: int = 0) -> int | None:
+    with SessionLocal() as session:
+        if lead_id:
+            lead = session.get(Lead, lead_id)
+            if lead and lead.telegram_user_id and lead.telegram_user_id > 0:
+                return lead.telegram_user_id
+            return None
+        student = session.get(Student, student_id)
+        if student is None or not student.lead_id:
+            return None
+        lead = session.get(Lead, student.lead_id)
+        if lead and lead.telegram_user_id and lead.telegram_user_id > 0:
+            return lead.telegram_user_id
+    return None
+
+
+@router.get("/templates")
+def templates_page(request: Request, saved: int = 0, _: str = Depends(check_auth)):
+    return templates.TemplateResponse(
+        request,
+        "msgtemplates.html",
+        {"templates": get_templates(), "saved": saved, "active": "templates"},
+    )
+
+
+@router.post("/templates/{key}")
+def save_template(key: str, text: str = Form(...), _: str = Depends(check_auth)):
+    with SessionLocal() as session:
+        template = session.get(MessageTemplate, key)
+        if template is None:
+            raise HTTPException(status_code=404, detail="Shablon topilmadi")
+        template.text = text.strip()[:2000] or template.text
+        template.updated_at = utcnow()
+        session.commit()
+        log.info("Message template updated: %s", key)
+    return RedirectResponse(url="/admin/templates?saved=1", status_code=303)
+
+
+@router.get("/leads/{lead_id}/message-text")
+def lead_message_text(lead_id: int, template: str = "", _: str = Depends(check_auth)):
+    """Template text with {ism}, {kurs}, ... filled for this lead."""
+    with SessionLocal() as session:
+        lead = session.get(Lead, lead_id)
+        if lead is None:
+            return JSONResponse({"ok": False, "error": "Lid topilmadi"}, status_code=404)
+        template_row = session.get(MessageTemplate, template)
+    if template_row is None:
+        return JSONResponse({"ok": False, "error": "Shablon topilmadi"}, status_code=404)
+    return JSONResponse({"ok": True, "text": fill_template_text(template_row.text, lead=lead)})
+
+
+@router.get("/students/{student_id}/message-text")
+def student_message_text(student_id: int, template: str = "", _: str = Depends(check_auth)):
+    with SessionLocal() as session:
+        student = session.get(Student, student_id)
+        if student is None:
+            return JSONResponse({"ok": False, "error": "Talaba topilmadi"}, status_code=404)
+        template_row = session.get(MessageTemplate, template)
+    if template_row is None:
+        return JSONResponse({"ok": False, "error": "Shablon topilmadi"}, status_code=404)
+    return JSONResponse({"ok": True, "text": fill_template_text(template_row.text, student=student)})
+
+
+def _send_template_message(user: str, kind: str, record_id: int, template: str, text: str) -> dict:
+    text = text.strip()
+    if not text:
+        return {"ok": False, "error": "Xabar matni bo'sh"}
+    if kind == "lead":
+        chat_id = _recipient_chat_id(lead_id=record_id)
+    else:
+        chat_id = _recipient_chat_id(student_id=record_id)
+    if chat_id is None:
+        return {"ok": False, "error": "Telegram chat ID yo'q (lid bot orqali kelgan bo'lishi kerak)"}
+    ok = tg.send_message(chat_id, text) is not None
+    # the sent message goes into the comment history
+    if kind == "lead":
+        add_lead_note(record_id, f"Xabar yuborildi: {text}", user)
+        log_audit(user, "lead", record_id, "yuborildi", "xabar", None, text)
+    else:
+        add_student_note(record_id, f"Xabar yuborildi: {text}", user)
+        log_audit(user, "student", record_id, "yuborildi", "xabar", None, text)
+    if not ok:
+        return {"ok": False, "error": "Yuborib bo'lmadi — Railway loglarini tekshiring"}
+    return {"ok": True}
+
+
+@router.post("/leads/{lead_id}/send-message")
+def send_lead_message(
+    lead_id: int,
+    template: str = Form(""),
+    text: str = Form(...),
+    user: str = Depends(check_auth),
+):
+    with SessionLocal() as session:
+        if session.get(Lead, lead_id) is None:
+            return JSONResponse({"ok": False, "error": "Lid topilmadi"}, status_code=404)
+    return JSONResponse(_send_template_message(user, "lead", lead_id, template, text))
+
+
+@router.post("/students/{student_id}/send-message")
+def send_student_message(
+    student_id: int,
+    template: str = Form(""),
+    text: str = Form(...),
+    user: str = Depends(check_auth),
+):
+    with SessionLocal() as session:
+        if session.get(Student, student_id) is None:
+            return JSONResponse({"ok": False, "error": "Talaba topilmadi"}, status_code=404)
+    return JSONResponse(_send_template_message(user, "student", student_id, template, text))
+
+
+# ---------------------------------------------------------------------------
+# Audit log (Boshqaruv > Jurnal) — admin only, append-only
+# ---------------------------------------------------------------------------
+
+def _is_admin_login(login: str) -> bool:
+    if login == settings.ADMIN_USER:
+        return True
+    with SessionLocal() as session:
+        from ..models import Employee
+
+        employee = session.query(Employee).filter(Employee.login == login).first()
+        return bool(employee and employee.role == "admin")
+
+
+@router.get("/audit")
+def audit_page(
+    request: Request,
+    user: str = "",
+    entity: str = "",
+    day: str = "",
+    user_login: str = Depends(check_auth),
+):
+    if not _is_admin_login(user_login):
+        raise HTTPException(status_code=403, detail="Faqat admin uchun")
+    parsed_day = None
+    if day:
+        try:
+            parsed_day = date.fromisoformat(day)
+        except ValueError:
+            parsed_day = None
+    entries = get_audit_log(user=user, entity=entity, day=parsed_day)
+    entities = [
+        ("", "Barcha yozuvlar"), ("lead", "Lidlar"), ("student", "Talabalar"),
+        ("payment", "To'lovlar"), ("group", "Guruhlar"), ("course", "Kurslar"),
+        ("teacher", "O'qituvchilar"), ("employee", "Xodimlar"), ("message", "Xabarlar"),
+    ]
+    return templates.TemplateResponse(
+        request,
+        "audit.html",
+        {
+            "entries": entries,
+            "users": audit_users(),
+            "entities": entities,
+            "f_user": user,
+            "f_entity": entity,
+            "f_day": day,
+            "active": "audit",
+        },
+    )
 
 @router.get("/debtors")
 def debtors_page(request: Request, sort: str = "debt", _: str = Depends(check_auth)):
@@ -966,6 +1429,7 @@ def students_page(
             "groups": groups,
             "student_statuses": STUDENT_STATUSES,
             "payment_methods": PAYMENT_METHODS,
+            "message_templates": get_templates(),
             "f_q": q,
             "f_group": group_id,
             "f_status": status,
@@ -984,16 +1448,20 @@ def update_student(
     status: str = Form(""),
     discount_type: str = Form(""),
     discount_value: int = Form(0),
-    _: str = Depends(check_auth),
+    user: str = Depends(check_auth),
 ):
     """Auto-save a student row (name, phone, group, status, discount)."""
-    from ..models import utcnow
     from ..services import refresh_group_status
 
     with SessionLocal() as session:
         student = session.get(Student, student_id)
         if student is None:
             return JSONResponse({"ok": False, "error": "Talaba topilmadi"}, status_code=404)
+        before = {
+            "ism": student.full_name or "", "telefon": student.phone or "",
+            "guruh": student.group_id or 0, "holat": student.status,
+            "chegirma_turi": student.discount_type or "", "chegirma": student.discount_value or 0,
+        }
         if full_name.strip():
             student.full_name = full_name.strip()
         if phone.strip():
@@ -1018,6 +1486,13 @@ def update_student(
             student.discount_value = None
         student.updated_at = utcnow()
         session.commit()
+        after = {
+            "ism": student.full_name or "", "telefon": student.phone or "",
+            "guruh": student.group_id or 0, "holat": student.status,
+            "chegirma_turi": student.discount_type or "", "chegirma": student.discount_value or 0,
+        }
+        session.commit()
+    audit_changes(user, "student", student_id, before, after)
     for gid in {old_group, group_id or None} - {None}:
         refresh_group_status(gid)
     log.info("Student %s updated (status=%s group=%s discount=%s)",
@@ -1130,18 +1605,21 @@ def add_payment_route(
         note=note,
         created_by=user,
     )
+    log_audit(user, "payment", payment.id, "yaratildi", "summa", None, payment.amount)
     return JSONResponse(
         {"ok": True, "payment": {"id": payment.id, "amount": payment.amount}}
     )
 
 
 @router.post("/payments/{payment_id}/delete")
-def delete_payment_route(payment_id: int, _: str = Depends(check_auth)):
+def delete_payment_route(payment_id: int, user: str = Depends(check_auth)):
     with SessionLocal() as session:
         payment = session.get(Payment, payment_id)
         if payment:
+            old_amount = payment.amount
             session.delete(payment)
             session.commit()
+            log_audit(user, "payment", payment_id, "ochirildi", "summa", old_amount, None)
             log.info("Payment deleted: id=%s", payment_id)
     return JSONResponse({"ok": True})
 

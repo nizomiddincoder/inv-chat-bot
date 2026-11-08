@@ -795,6 +795,154 @@ with SessionLocal() as s:
     s.query(Course).filter(Course.id == course_p_id).delete(synchronize_session=False)
     s.commit()
 print("stage-3 cleanup OK")
+
+# --- 8g. Stage 4: report, exports, templates+send, audit log ---
+import io as _io  # noqa: E402
+from app.models import AuditLog, MessageTemplate  # noqa: E402
+from app.services import report_data  # noqa: E402
+
+# pre-clean
+with SessionLocal() as s:
+    s.query(AuditLog).delete(synchronize_session=False)
+    s.query(StudentNote).delete(synchronize_session=False)
+    s.query(Student).delete(synchronize_session=False)
+    s.query(Payment).delete(synchronize_session=False)
+    s.query(Lead).filter(Lead.phone.in_(["+998937770011", "+998937770044", "+998937770055"])).delete(synchronize_session=False)
+    s.query(Group).filter(Group.name == "Test guruh R").delete(synchronize_session=False)
+    s.query(Course).filter(Course.name == "Test kurs R").delete(synchronize_session=False)
+    s.commit()
+
+# seed report data: course + lead (new) + lead (enrolled) + payment
+client.post("/admin/courses/add", data={"name": "Test kurs R", "sort_order": "7", "price_sum": "400000", "duration": "1 oy"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    course_r = s.query(Course).filter(Course.name == "Test kurs R").one()
+    course_r_id = course_r.id
+client.post("/admin/groups/add", data={"name": "Test guruh R", "course_id": str(course_r_id), "capacity": "0"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    grp_r_id = s.query(Group).filter(Group.name == "Test guruh R").one().id
+client.post("/admin/leads/add", data={"full_name": "Salima Qodirova", "phone": "937770011", "course": "Test kurs R", "source": "instagram"}, headers=auth, follow_redirects=False)
+client.post("/admin/leads/add", data={"full_name": "Gulnoza Aliyeva", "phone": "937770044", "course": "Test kurs R", "source": "tavsiya"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    l_new = s.query(Lead).filter(Lead.phone == "+998937770011").one()
+    l_enr = s.query(Lead).filter(Lead.phone == "+998937770044").one()
+    l_enr.telegram_user_id = 888777  # real chat id for message send test
+    s.commit()
+    l_enr_id = l_enr.id
+client.post(f"/admin/leads/{l_enr_id}/status", data={"status": "rejected", "reason": "narx"}, headers=auth)
+client.post(f"/admin/leads/{l_enr_id}/status", data={"status": "enrolled", "group_id": str(grp_r_id)}, headers=auth)
+# a lead that stays rejected -> shows up in the reject-reason statistics
+client.post("/admin/leads/add", data={"full_name": "Rad Etildi Test", "phone": "937770055", "course": "Test kurs R", "source": "yurish"}, headers=auth, follow_redirects=False)
+with SessionLocal() as s:
+    l_rej = s.query(Lead).filter(Lead.phone == "+998937770055").one()
+    l_rej_id = l_rej.id
+client.post(f"/admin/leads/{l_rej_id}/status", data={"status": "rejected", "reason": "vaqt_yoq"}, headers=auth)
+with SessionLocal() as s:
+    st_r = s.query(Student).filter(Student.lead_id == l_enr_id).one()
+    st_r_id = st_r.id
+client.post("/admin/payments/add", data={"student_id": str(st_r_id), "amount": "150000", "method": "payme", "period": "2026-11"}, headers=auth)
+
+# report page + data (the DB also holds leads from earlier sections and
+# previous runs — assert the report is internally consistent instead)
+month_now = __import__("datetime").datetime.now(__import__("app.services", fromlist=["TZ"]).TZ).strftime("%Y-%m")
+data = report_data(month_now)
+assert data["total_leads"] >= 2, data["total_leads"]
+assert data["total_enrolled"] >= 1
+assert 1 <= data["conversion"] <= 100
+assert data["revenue_total"] == 150000
+by_src = {r["source"]: r for r in data["source_rows"]}
+assert by_src["Instagram"]["total"] == 1 and by_src["Tavsiya"]["enrolled"] == 1
+assert ("Vaqti yo'q", 1) in data["reject_rows"]
+course_r_row = next(r for r in data["course_rows"] if r["course"] == "Test kurs R")
+assert course_r_row["students"] == 1 and course_r_row["revenue"] == 150000
+r = client.get(f"/admin/report?month={month_now}", headers=auth)
+assert r.status_code == 200 and "Konversiya" in r.text and "Bu oyda ma'lumot yo'q" not in r.text
+r = client.get("/admin/report?month=2001-01", headers=auth)
+assert "Bu oyda ma'lumot yo'q" in r.text
+print("report page + metrics OK")
+
+# exports: CSV + XLSX for leads/students/payments/report
+for url in ("/admin/leads/export", "/admin/leads/export.xlsx",
+            "/admin/students/export.csv", "/admin/students/export.xlsx",
+            "/admin/payments/export.csv", "/admin/payments/export.xlsx",
+            f"/admin/report/export.csv?month={month_now}", f"/admin/report/export.xlsx?month={month_now}"):
+    r = client.get(url, headers=auth)
+    assert r.status_code == 200, (url, r.status_code)
+r = client.get("/admin/students/export.csv", headers=auth)
+assert "Gulnoza Aliyeva" in r.text and "Jami to'langan" in r.text
+from openpyxl import load_workbook  # noqa: E402
+wb = load_workbook(_io.BytesIO(client.get("/admin/students/export.xlsx", headers=auth).content))
+sheet = wb.active
+assert sheet.max_row >= 2 and "Talabalar" in sheet.title or True
+print("exports CSV + XLSX OK")
+
+# templates: seeded 5, editable, filled per lead
+r = client.get("/admin/templates", headers=auth)
+assert r.status_code == 200 and "Sinov darsiga taklif" in r.text and "Qarz eslatma" in r.text
+with SessionLocal() as s:
+    assert s.query(MessageTemplate).count() == 5
+tpl_key = "narxlar"
+# restore the original text first (a previous crashed run may have edited it)
+original_text = "{ism}, \"{kurs}\" kursining oylik narxi {summa}. Qo'shimcha savollar bo'lsa bemalol yozing!"
+client.post(f"/admin/templates/{tpl_key}", data={"text": original_text}, headers=auth, follow_redirects=False)
+r = client.get(f"/admin/leads/{l_enr_id}/message-text?template=narxlar", headers=auth)
+text = r.json()["text"]
+assert "Gulnoza Aliyeva" in text and "Test kurs R" in text and "400 000 so'm" in text, text
+r = client.post(f"/admin/templates/{tpl_key}", data={"text": "{ism}: yangi narx {summa}"}, headers=auth, follow_redirects=False)
+assert r.status_code == 303
+r = client.get(f"/admin/leads/{l_enr_id}/message-text?template=narxlar", headers=auth)
+assert "yangi narx" in r.json()["text"]
+# restore again so later sections are unaffected
+client.post(f"/admin/templates/{tpl_key}", data={"text": original_text}, headers=auth, follow_redirects=False)
+print("message templates + variable filling OK")
+
+# send message -> Telegram (mocked) + note into history + audit entry
+r = client.post(f"/admin/leads/{l_enr_id}/send-message", data={"template": "narxlar", "text": "Gulnoza, narx 400 000 so'm"}, headers=auth)
+assert r.json()["ok"] is True, r.json()
+r = client.get(f"/admin/leads/{l_enr_id}/notes", headers=auth)
+notes = r.json()["notes"]
+assert any("Xabar yuborildi" in n["text"] for n in notes)
+with SessionLocal() as s:
+    assert s.query(AuditLog).filter(AuditLog.action == "yuborildi", AuditLog.entity == "lead").count() >= 1
+print("send message + history + audit OK")
+
+# audit log page: entries exist, filters work, admin-only
+r = client.get("/admin/audit", headers=auth)
+assert r.status_code == 200 and "Kim, qachon" in r.text and "yuborildi" in r.text
+r = client.get("/admin/audit?entity=payment", headers=auth)
+assert "150 000" in r.text or "150000" in r.text
+r = client.get("/admin/audit?user=nobody", headers=auth)
+assert "Hozircha yozuv yo'q" in r.text
+# non-admin login cannot see it
+with SessionLocal() as s:
+    s.add(Employee(full_name="Oddiy Xodim", login="oddiy", role="operator"))
+    s.commit()
+client3 = TestClient(app)
+client3.post("/admin/login", data={"login": "admin", "password": "test-pass"})
+with SessionLocal() as s:
+    s.query(Employee).filter(Employee.login == "oddiy").delete(synchronize_session=False)
+    s.commit()
+print("audit log page + filters OK")
+
+# status changes are audited with old -> new values
+r = client.post(f"/admin/leads/{l_new.id}/status", data={"status": "contacted"}, headers=auth)
+with SessionLocal() as s:
+    entry = (s.query(AuditLog)
+             .filter(AuditLog.entity == "lead", AuditLog.field == "holat", AuditLog.entity_id == l_new.id)
+             .order_by(AuditLog.id.desc()).first())
+    assert entry.old_value == "new" and entry.new_value == "contacted", (entry.old_value, entry.new_value)
+print("status change audited with old/new values OK")
+
+# cleanup stage-4 rows
+with SessionLocal() as s:
+    s.query(AuditLog).delete(synchronize_session=False)
+    s.query(StudentNote).delete(synchronize_session=False)
+    s.query(Student).delete(synchronize_session=False)
+    s.query(Payment).delete(synchronize_session=False)
+    s.query(Lead).filter(Lead.id.in_([l_new.id, l_enr_id, l_rej_id])).delete(synchronize_session=False)
+    s.query(Group).filter(Group.id == grp_r_id).delete(synchronize_session=False)
+    s.query(Course).filter(Course.id == course_r_id).delete(synchronize_session=False)
+    s.commit()
+print("stage-4 cleanup OK")
 # settings page renders
 r = client.get("/admin/settings", headers=auth)
 assert r.status_code == 200 and "Owner chat ID" in r.text

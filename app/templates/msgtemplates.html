@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .tpl-card textarea { min-height: 74px; }
+  .tpl-card .vars { font-size: 12px; color: var(--faint); margin-top: 6px; }
+</style>
+
+<h1>Xabar shablonlari</h1>
+<p class="page-sub">Lid yoki talaba kartasidan bir bosishda yuboriladigan tayyor xabarlar.</p>
+
+{% for t in templates %}
+<div class="card tpl-card" data-key="{{ t.key }}">
+  <h2>{{ t.title }}</h2>
+  <textarea data-f="text" data-orig="{{ t.text }}">{{ t.text }}</textarea>
+  <div class="vars">O'zgaruvchilar: {ism} {telefon} {kurs} {guruh} {summa} {qarz} {sana}</div>
+</div>
+{% endfor %}
+
+<script>
+(function () {
+  var timers = {};
+  document.querySelectorAll(".tpl-card").forEach(function (card) {
+    card.querySelector("[data-f='text']").addEventListener("input", function () {
+      clearTimeout(timers[card.dataset.key]);
+      timers[card.dataset.key] = setTimeout(function () { saveCard(card); }, 500);
+    });
+  });
+
+  function saveCard(card) {
+    var body = new URLSearchParams({ text: card.querySelector("[data-f='text']").value });
+    fetch("/admin/templates/" + card.dataset.key, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) {
+      if (!r.ok) { showToast("Saqlanmadi"); return; }
+      card.querySelector("[data-f='text']").dataset.orig = card.querySelector("[data-f='text']").value;
+      showToast("Saqlandi");
+    }).catch(function () { showToast("Tarmoq xatosi"); });
+  }
+})();
+</script>
+{% endblock %}

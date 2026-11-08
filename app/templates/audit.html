@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .audit-filter { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .old-new { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .chip-old { background: var(--danger-bg); color: var(--danger-text); border-radius: 6px; padding: 1px 7px; font-size: 12px; }
+  .chip-new { background: var(--ok-bg); color: var(--ok-text); border-radius: 6px; padding: 1px 7px; font-size: 12px; }
+  .who { font-weight: 600; }
+  .arrow { color: var(--faint); }
+</style>
+
+<h1>Jurnal (audit)</h1>
+<p class="page-sub">Kim, qachon, nimani o'zgartirdi. Yozuvlar o'chirilmaydi va o'zgartirilmaydi. Faqat admin ko'ra oladi.</p>
+
+<form method="get" action="/admin/audit" class="card audit-filter">
+  <input type="date" name="day" value="{{ f_day }}" title="Sana bo'yicha filtr">
+  <select name="user" aria-label="Xodim">
+    <option value="">Barcha xodimlar</option>
+    {% for u in users %}
+    <option value="{{ u }}" {{ 'selected' if u == f_user else '' }}>{{ u }}</option>
+    {% endfor %}
+  </select>
+  <select name="entity" aria-label="Yozuv turi">
+    {% for value, label in entities %}
+    <option value="{{ value }}" {{ 'selected' if value == f_entity else '' }}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <button class="small">Filtr</button>
+</form>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>Vaqt</th><th>Kim</th><th>Yozuv</th><th>Amal</th><th>Maydon</th><th>O'zgarish</th></tr>
+  </thead>
+  <tbody>
+  {% for e in entries %}
+    <tr>
+      <td class="nowrap">{{ e.created_at | tashkent }}</td>
+      <td class="who">{{ e.user }}</td>
+      <td>{{ e.entity }} #{{ e.entity_id }}</td>
+      <td>{{ e.action }}</td>
+      <td>{{ e.field or '—' }}</td>
+      <td>
+        {% if e.action == 'ozgartirildi' %}
+        <span class="old-new">
+          <span class="chip-old">{{ e.old_value if e.old_value is not none else '—' }}</span>
+          <span class="arrow">→</span>
+          <span class="chip-new">{{ e.new_value if e.new_value is not none else '—' }}</span>
+        </span>
+        {% elif e.old_value or e.new_value %}
+          {{ e.new_value or e.old_value }}
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">Hozircha yozuv yo'q.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}
