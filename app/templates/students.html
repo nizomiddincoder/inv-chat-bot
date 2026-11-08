@@ -56,7 +56,42 @@
 </style>
 
 <h1>Talabalar</h1>
-<p class="page-sub">"O'qishga yozildi" holatidagi lidlardan avtomatik yaratiladi. Kartada to'lovlar va qarz.</p>
+<p class="page-sub">"O'qishga yozildi" holatidagi lidlardan avtomatik yaratiladi yoki qo'lda qo'shiladi.</p>
+
+<div class="card">
+  <h2>Yangi talaba</h2>
+  <form method="post" action="/admin/students/add" id="add-student" novalidate>
+    <div class="actions" style="align-items:flex-end;">
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label for="sa-name" style="margin:0;font-size:12.5px;color:var(--muted)">Ism familiya</label>
+        <input type="text" id="sa-name" name="full_name" placeholder="Masalan: Jasur Karimov" style="width:180px">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label for="sa-phone" style="margin:0;font-size:12.5px;color:var(--muted)">Telefon</label>
+        <input type="text" id="sa-phone" name="phone" placeholder="901234567" style="width:140px">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label for="sa-group" style="margin:0;font-size:12.5px;color:var(--muted)">Guruh</label>
+        <select id="sa-group" name="group_id" style="width:160px">
+          <option value="0">— guruhsiz —</option>
+          {% for g in groups %}
+          <option value="{{ g.id }}">{{ g.name }}{% if g.status == 'toldi' %} (to'ldi){% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label for="sa-status" style="margin:0;font-size:12.5px;color:var(--muted)">Holat</label>
+        <select id="sa-status" name="status" style="width:140px">
+          {% for value, label in student_statuses.items() %}
+          <option value="{{ value }}" {{ 'selected' if value == 'faol' else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit">Qo'shish</button>
+    </div>
+    <div class="field-error" id="sa-error" hidden></div>
+  </form>
+</div>
 
 <div class="card" style="padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
   <span class="hint" style="margin:0">Test belgili lid va talabalar:</span>
@@ -205,6 +240,40 @@
     } else {
       el.addEventListener("change", function () { form.submit(); });
     }
+  });
+
+  // --- add student: validate, submit via fetch, reload on success ---
+  var addForm = document.getElementById("add-student");
+  var saName = document.getElementById("sa-name");
+  var saPhone = document.getElementById("sa-phone");
+  var saError = document.getElementById("sa-error");
+  addForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var digits = saPhone.value.replace(/\D/g, "");
+    if (!saName.value.trim() || digits.length < 9) {
+      saError.textContent = "Ism va to'g'ri telefon raqamini kiriting.";
+      saError.hidden = false;
+      (saName.value.trim() ? saPhone : saName).focus();
+      return;
+    }
+    var body = new URLSearchParams({
+      full_name: saName.value,
+      phone: saPhone.value,
+      group_id: document.getElementById("sa-group").value,
+      status: document.getElementById("sa-status").value
+    });
+    fetch("/admin/students/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok) { saError.textContent = data.error || "Saqlanmadi"; saError.hidden = false; return; }
+      showToast("Talaba qo'shildi");
+      setTimeout(function () { location.reload(); }, 700);
+    }).catch(function () { saError.textContent = "Tarmoq xatosi"; saError.hidden = false; });
+  });
+  [saName, saPhone].forEach(function (el) {
+    el.addEventListener("input", function () { saError.hidden = true; });
   });
 
   // --- auto-save row changes (500ms debounce) ---

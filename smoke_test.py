@@ -1041,6 +1041,33 @@ with SessionLocal() as s:
     s.commit()
 _failed_logins.clear()
 print("stage-5 cleanup OK")
+
+# --- 8i. Manual student creation (admin in-app) ---
+from app.models import Student as StudentM  # noqa: E402
+with SessionLocal() as s:
+    s.query(Student).filter(Student.phone.in_(["+998939990011", "+998939990022"])).delete(synchronize_session=False)
+    s.commit()
+r = client.post("/admin/students/add", data={"full_name": "Jasur Karimov", "phone": "939990011", "group_id": "0", "status": "faol"}, headers=auth)
+assert r.json()["ok"] is True, r.json()
+with SessionLocal() as s:
+    st_new = s.query(Student).filter(Student.phone == "+998939990011").one()
+    assert st_new.full_name == "Jasur Karimov" and st_new.status == "faol"
+    assert st_new.enrolled_at is not None and st_new.lead_id is None
+# duplicate phone -> clear error
+r = client.post("/admin/students/add", data={"full_name": "Boshqa Jasur", "phone": "+998 93 999 00 11", "group_id": "0", "status": "faol"}, headers=auth)
+assert r.status_code == 400 and "allaqachon" in r.json()["error"]
+# audit entry written
+with SessionLocal() as s:
+    assert (s.query(AuditLog).filter(AuditLog.entity == "student", AuditLog.action == "yaratildi")
+            .order_by(AuditLog.id.desc()).first().new_value).find("Jasur") != -1
+# page renders the add form
+r = client.get("/admin/students", headers=auth)
+assert "Yangi talaba" in r.text
+# cleanup
+with SessionLocal() as s:
+    s.query(Student).filter(Student.phone == "+998939990011").delete(synchronize_session=False)
+    s.commit()
+print("manual student creation OK")
 # settings page renders
 r = client.get("/admin/settings", headers=auth)
 assert r.status_code == 200 and "Owner chat ID" in r.text

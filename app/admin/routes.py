@@ -1628,6 +1628,51 @@ def students_page(
     )
 
 
+@router.post("/students/add")
+def add_student_manual(
+    full_name: str = Form(...),
+    phone: str = Form(...),
+    group_id: int = Form(0),
+    status: str = Form("faol"),
+    user: str = Depends(check_auth),
+):
+    """Create a student by hand from the admin panel (no Telegram lead)."""
+    from ..models import utcnow
+    from ..services import refresh_group_status
+
+    full_name = full_name.strip()
+    normalized = normalize_phone(phone or "")
+    if not full_name or normalized is None:
+        return JSONResponse({"ok": False, "error": "Ism va to'g'ri telefon kerak"}, status_code=400)
+    if status not in STUDENT_STATUSES:
+        status = "faol"
+    with SessionLocal() as session:
+        exists = session.query(Student).filter(Student.phone == normalized).first()
+        if exists:
+            return JSONResponse(
+                {"ok": False, "error": "Bu telefon raqamli talaba allaqachon bor"}, status_code=400
+            )
+        student = Student(
+            full_name=full_name,
+            phone=normalized,
+            group_id=group_id or None,
+            status=status if status != "faol" else "faol",
+            source="boshqa",
+            enrolled_at=datetime.now(TZ).date(),
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        session.add(student)
+        session.commit()
+        session.refresh(student)
+        student_id_new = student.id
+    if student.group_id:
+        refresh_group_status(student.group_id)
+    log_audit(user, "student", student_id_new, "yaratildi", None, None, f"{full_name}, {normalized}")
+    log.info("Manual student created: id=%s name=%s", student_id_new, full_name)
+    return JSONResponse({"ok": True, "student_id": student_id_new})
+
+
 @router.post("/students/{student_id}/update")
 def update_student(
     student_id: int,

@@ -37,7 +37,19 @@
 </style>
 
 <h1>Guruhlar</h1>
-<p class="page-sub">Kurs, o'qituvchi, jadval va o'rinlar — o'rinlar to'lganda guruh avtomatik "To'ldi" bo'ladi.</p>
+<p class="page-sub">Kurs, o'qituvchi, dars kunlari va o'rinlar — o'rinlar to'lganda guruh avtomatik "To'ldi" bo'ladi.</p>
+
+<style>
+  .day-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+  .day-chip-btn {
+    border: 1px solid var(--border); border-radius: var(--r-sm);
+    background: var(--surface); color: var(--muted);
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+    padding: 0 0; height: 34px; min-width: 42px; cursor: pointer;
+  }
+  .day-chip-btn.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .time-inline { height: 34px; width: 92px; }
+</style>
 
 <div class="card">
   <h2>Yangi guruh ochish</h2>
@@ -65,8 +77,18 @@
       </select>
     </div>
     <div class="fld">
-      <label for="new-schedule">Dars kunlari va vaqti</label>
-      <input type="text" name="schedule" id="new-schedule" placeholder="Du-Chor-Ju 16:00">
+      <label>Dars kunlari va vaqti</label>
+      <div class="day-chips" data-days>
+        <button type="button" class="day-chip-btn" data-day="Du">Du</button>
+        <button type="button" class="day-chip-btn" data-day="Se">Se</button>
+        <button type="button" class="day-chip-btn" data-day="Chor">Chor</button>
+        <button type="button" class="day-chip-btn" data-day="Pay">Pay</button>
+        <button type="button" class="day-chip-btn" data-day="Ju">Ju</button>
+        <button type="button" class="day-chip-btn" data-day="Sha">Sha</button>
+        <button type="button" class="day-chip-btn" data-day="Ya">Ya</button>
+        <input type="time" class="time-inline" data-time value="16:00">
+      </div>
+      <input type="hidden" name="schedule" value="">
     </div>
     <div class="fld">
       <label for="new-start">Boshlanish sanasi</label>
@@ -113,7 +135,17 @@
   </div>
   <div class="fld">
     <label>Dars kunlari va vaqti</label>
-    <input type="text" data-f="schedule" value="{{ g.schedule or '' }}" data-orig="{{ g.schedule or '' }}" placeholder="Du-Chor-Ju 16:00">
+    <div class="day-chips" data-days data-value="{{ g.schedule or '' }}">
+      <button type="button" class="day-chip-btn" data-day="Du">Du</button>
+      <button type="button" class="day-chip-btn" data-day="Se">Se</button>
+      <button type="button" class="day-chip-btn" data-day="Chor">Chor</button>
+      <button type="button" class="day-chip-btn" data-day="Pay">Pay</button>
+      <button type="button" class="day-chip-btn" data-day="Ju">Ju</button>
+      <button type="button" class="day-chip-btn" data-day="Sha">Sha</button>
+      <button type="button" class="day-chip-btn" data-day="Ya">Ya</button>
+      <input type="time" class="time-inline" data-time>
+    </div>
+    <input type="hidden" data-f="schedule" value="{{ g.schedule or '' }}" data-orig="{{ g.schedule or '' }}">
   </div>
   <div class="fld">
     <label>Boshlanish</label>
@@ -162,6 +194,61 @@
 </div>
 
 <script>
+// --- day picker: chips + time -> "Du-Chor-Ju 16:00" in the schedule field ---
+var DAY_ORDER = ["Du", "Se", "Chor", "Pay", "Ju", "Sha", "Ya"];
+window.__bindDayPicker = function (scope) {
+  var chips = scope.querySelectorAll(".day-chip-btn");
+  var timeInput = scope.querySelector("[data-time]");
+  var hidden = scope.querySelector('input[name="schedule"], input[data-f="schedule"]');
+
+  function compose() {
+    var days = [];
+    DAY_ORDER.forEach(function (d) {
+      var chip = scope.querySelector('.day-chip-btn[data-day="' + d + '"]');
+      if (chip && chip.classList.contains("on")) days.push(d);
+    });
+    var time = timeInput.value ? " " + timeInput.value : "";
+    if (hidden) {
+      hidden.value = days.length ? days.join("-") + time : "";
+    }
+    return hidden ? hidden.value : "";
+  }
+
+  function parse(value) {
+    chips.forEach(function (c) { c.classList.remove("on"); });
+    if (!value) { if (timeInput) timeInput.value = ""; return; }
+    var parts = value.trim().split(/\s+/);
+    var timePart = parts.length > 1 && parts[parts.length - 1].indexOf(":") !== -1 ? parts.pop() : "";
+    if (timeInput) timeInput.value = timePart;
+    var days = parts.join(" ").split(/[-\/,\s]+/).filter(Boolean);
+    days.forEach(function (token) {
+      var t = token.toLowerCase();
+      chips.forEach(function (c) {
+        var key = c.dataset.day.toLowerCase();
+        if (t === key || key.indexOf(t) === 0 || t.indexOf(key) === 0 || t.slice(0, 2) === key.slice(0, 2)) {
+          c.classList.add("on");
+        }
+      });
+    });
+  }
+
+  chips.forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      chip.classList.toggle("on");
+      compose();
+      if (hidden) hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  });
+  if (timeInput) {
+    timeInput.addEventListener("input", function () {
+      compose();
+      if (hidden) hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+  if (hidden) parse(hidden.value);
+  compose();
+};
+
 (function () {
   // --- auto-save each group card (500ms debounce) ---
   var timers = {};
@@ -232,6 +319,11 @@
       nameError.hidden = false;
       nameInput.focus();
     }
+  });
+
+  // --- bind every day picker on the page ---
+  document.querySelectorAll(".day-chips").forEach(function (chips) {
+    window.__bindDayPicker(chips.parentElement);
   });
 })();
 </script>
